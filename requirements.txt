@@ -1,0 +1,6 @@
+jax==0.5.2 # computational framework used to take advantage of parallelisation and vectorisation. XLA, Autograd and JIT. 
+flax==0.10.6 # Neural network framework to build out IPPO and GRU
+chex==0.1.89 # prevent silent bugs from occurring through silent erroneous broadcasting
+distrax # creates the probability distributions that we need to sample from 
+wandb # used to plot the fancy graphs seen in the MARL book
+pillow # used to render a visualisation of environment

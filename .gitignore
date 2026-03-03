@@ -1,0 +1,5 @@
+__pycache__/
+random_actions_gif/
+wandb/
+checkpoints
+.venv/
