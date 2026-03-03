@@ -13,7 +13,7 @@ ISP is derived from the CleanUp-style multi-agent environment lineage and extend
 This project builds on:
 
 - SocialJAX (original CleanUp environment):
-  https://github.com/cooperativeai/SocialJAX
+  https://github.com/cooperativex/SocialJax/tree/main
 
 - Claude Formanek’s CleanUp variant:
   https://github.com/jcformanek/clean_up
