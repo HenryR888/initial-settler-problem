@@ -681,7 +681,7 @@ class Clean_up(MultiAgentEnv):
 
             angles = jax.nn.one_hot(angles, 4)
 
-            # one-hot (drop first channel as its empty blocks)
+            # one-hot (drop first channel as its empty blocks)...this one-hot encoding of the grid is what gets input into our CNN in our ippo.py file
             grids = jax.nn.one_hot(
                 grids - 1,
                 num_agents + len(Items) - 1, # will be collapsed into a

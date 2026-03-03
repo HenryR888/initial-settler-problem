@@ -27,39 +27,39 @@ CONFIG = {
     "SEED": 42,
     "NUM_SEEDS": 1,
     "LR": 0.0003,
-    "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU
-    "NUM_STEPS": 1000,
-    "TOTAL_TIMESTEPS": 1e8,
-    "UPDATE_EPOCHS": 2,
-    "NUM_MINIBATCHES": 500,
+    "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
+    "NUM_STEPS": 1000, # rollout horizon - i.e. num of env steps before performing policy update
+    "TOTAL_TIMESTEPS": 1e8, # total number of time steps before training ends
+    "UPDATE_EPOCHS": 2, # number of times we iterate over the rollot data before collecting new data 
+    "NUM_MINIBATCHES": 500, # splitting the data into NUM_MINIBATCHES 
     "GAMMA": 0.99,
-    "GAE_LAMBDA": 0.95,
-    "CLIP_EPS": 0.2,
-    "ENT_COEF": 0.01,
+    "GAE_LAMBDA": 0.95, # used within the Generalised Advantage Estimator for A_t
+    "CLIP_EPS": 0.2, # epsilon in the clip objective function...interpretation is that policy is not allowed to change by more than 20% per update step...remember that if we have one bad gradient step then the policy collapses.
+    "ENT_COEF": 0.01, # entropy coef
     "VF_COEF": 0.5,
-    "MAX_GRAD_NORM": 0.5,
+    "MAX_GRAD_NORM": 0.5, # prevents exploding gradients
     "ACTIVATION": "relu",
     "ENV_NAME": "clean_up",
-    "ENV_KWARGS": {
+    "ENV_KWARGS": { #KWARGS stands for keywords as arguments, which allow us to unpack the dictionary as parameters within our clean_up function later on
         "num_agents" : 3,
-        "num_inner_steps" : 1000,
+        "num_inner_steps" : 1000, # num of steps before environment resets
         "reward_type" : "fractional",  # NOTE: "shared", "individual", or "saturating"
         "cnn" : True,
         "jit" : True,
-        "agent_ids" : True,  # NOTE: switch to True to enable agent ID channels in observations
+        "agent_ids" : True,  # NOTE: switch to True to enable agent ID channels in observations...(each agent can distringuish itself from other)
     },
-    "ANNEAL_LR": False,
-    "GIF_NUM_FRAMES": 250,
+    "ANNEAL_LR": False, # NOTE: switch to True if you want learning rate to decay linearly over training
+    "GIF_NUM_FRAMES": 250, # length of evaluation for GIF evaluation...this is only for visualising post-training
     # WandB Params
     "ENTITY": "",
     "PROJECT": "socialjax",
-    "WANDB_MODE" : "online",
+    "WANDB_MODE" : "online", # NOTE: for dev, set to offline
     "WANDB_TAGS": ["3-agents", "individual_reward", "small-map"],
 }
 
 class CNN(nn.Module):
     activation: str = "relu"
-    dtype: Any = jnp.bfloat16
+    dtype: Any = jnp.bfloat16 
 
     @nn.compact
     def __call__(self, x):
@@ -97,6 +97,7 @@ class CNN(nn.Module):
         x = activation(x)
         x = x.reshape((x.shape[0], -1))  # Flatten
 
+        # we get a 64-dimensional vector of learned features from the grid that gets input from our clean_up file
         x = nn.Dense(
             features=64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
             dtype=self.dtype,
