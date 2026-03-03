@@ -59,45 +59,47 @@ CONFIG = {
 
 class CNN(nn.Module):
     activation: str = "relu"
-    dtype: Any = jnp.bfloat16 
+    dtype: Any = jnp.bfloat16 # reduced precision but much faster
 
     @nn.compact
     def __call__(self, x):
-        x = x.astype(self.dtype)
+        x = x.astype(self.dtype) # cast input to bfloat16 for speed
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
         x = nn.Conv(
             features=32,
-            kernel_size=(5, 5),
+            kernel_size=(5, 5), # apply 32 different 5x5 filters to grid...i.e. learn the spatial patterns in a 5x5 neighbourhood
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             dtype=self.dtype,
             param_dtype=jnp.float32,
         )(x)
-        x = activation(x)
+        x = activation(x) # add the non-linearity so the network can represent more complicated function
         x = nn.Conv(
             features=32,
-            kernel_size=(3, 3),
+            kernel_size=(3, 3), # now apply another set of 32 different 3x3 filters to grid
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             dtype=self.dtype,
             param_dtype=jnp.float32,
         )(x)
-        x = activation(x)
+        x = activation(x) # apply activation after each convolution
         x = nn.Conv(
             features=32,
-            kernel_size=(3, 3),
+            kernel_size=(3, 3), # apply one more time, 32 different 3x3 filters to  grid
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             dtype=self.dtype,
             param_dtype=jnp.float32,
         )(x)
         x = activation(x)
-        x = x.reshape((x.shape[0], -1))  # Flatten
+        x = x.reshape((x.shape[0], -1))  # Flatten to get single feature vector per observation
+        # The reason we choose to flatten here is because we can compress all the information we have about what exists and where into one compact state embedding,
+        # which is often much simpler than keeping the spatial tensor and needing many more convolution layers within the net
 
-        # we get a 64-dimensional vector of learned features from the grid that gets input from our clean_up file
+        # we get a 64-dimensional vector of learned features from the grid that comes from initial input from our clean_up file. This 64 dimensional embedding then gets sent to policy/value head
         x = nn.Dense(
             features=64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
             dtype=self.dtype,
