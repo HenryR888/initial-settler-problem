@@ -15,7 +15,7 @@ This project builds on:
 - SocialJAX (original Clean Up environment):
   https://github.com/cooperativex/SocialJax/tree/main
 
-- Claude Formanek’s Clean Up variant:
+- Claude Formanek’s Clean Up Reward-Shaping variant:
   https://github.com/jcformanek/clean_up
 
 Full credit for the original Clean Up environment design belongs to the upstream authors.
