@@ -6,19 +6,19 @@ Multi-agent reinforcement learning environment for the Initial Settler Problem (
 
 This repository contains the development version of the ISP environment and associated training code.
 
-ISP is derived from the CleanUp-style multi-agent environment lineage and extends it with new institutional and reward dynamics specific to the Initial Settler Problem.
+ISP is derived from the Clean Up-style multi-agent environment lineage and extends it with new institutional and reward dynamics specific to the Initial Settler Problem.
 
 ## Attribution
 
 This project builds on:
 
-- SocialJAX (original CleanUp environment):
+- SocialJAX (original Clean Up environment):
   https://github.com/cooperativex/SocialJax/tree/main
 
-- Claude Formanek’s CleanUp variant:
+- Claude Formanek’s Clean Up variant:
   https://github.com/jcformanek/clean_up
 
-Full credit for the original CleanUp environment design belongs to the upstream authors.
+Full credit for the original Clean Up environment design belongs to the upstream authors.
 
 The ISP environment introduces new structural and experimental modifications.
 
