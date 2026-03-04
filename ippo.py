@@ -116,34 +116,35 @@ class ActorCritic(nn.Module):
     dtype: Any = jnp.bfloat16
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x): # define the forward pass 
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
-
+        # this is the embedding from the output of our convolutional neural network, which will be receive by actor (policy) critic (value) head
         embedding = CNN(self.activation, dtype=self.dtype)(x)
-
+        # because we have discrete actions here, the actor will output logits...the name mean, comes from a Gaussian policy which outputs continuous action spaces
         actor_mean = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
-            dtype=self.dtype,
-            param_dtype=jnp.float32,
-        )(embedding)
-        actor_mean = activation(actor_mean)
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), # we've got 64 neurons in this layer (since we have a 64-dim embedding)...note that each neuron will receive this entire embedding vector
+            dtype=self.dtype, # that kernel_init actually comes from how we initialise the weights. the weights here satisfy W'W =I...this stabilises our training and reduces vanishing/exploding gradients. The reason being that orthogonal matrices allow for preservation of vector length.
+            param_dtype=jnp.float32, #...cont from above, this means that ||W_x|| \approx ||x||
+        )(embedding) # np.sqrt(2) allows for gain of the output...since half the values (h) become zero, the variance of activations...so, the signal drops quickly, thus we want to boost it to maintain some signal
+        actor_mean = activation(actor_mean) # apply non-linearity
         actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0),
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), # the small gain (0.01) is to keep the initial logit near 0 to prevent huge deviations in the policy training, initially
             dtype=self.dtype,
             param_dtype=jnp.float32,
         )(actor_mean)
-        pi = distrax.Categorical(logits=actor_mean.astype(jnp.float32))
+        pi = distrax.Categorical(logits=actor_mean.astype(jnp.float32)) # then use distrax to build out distribution from logits
 
-        critic = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
+        # value head...
+        critic = nn.Dense( # same logic as actor hidden layer
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), # notice that we initialise the bias at zero, because we want stable initialisation to just be Wx
             dtype=self.dtype,
             param_dtype=jnp.float32,
         )(embedding)
         critic = activation(critic)
-        critic = nn.Dense(
+        critic = nn.Dense( # output scalar value prediction per observation
             1, kernel_init=orthogonal(1.0), bias_init=constant(0.0),
             dtype=self.dtype,
             param_dtype=jnp.float32,
