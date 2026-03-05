@@ -583,7 +583,7 @@ def evaluate(params, env, save_path, config):
     for o_t in range(config["GIF_NUM_FRAMES"]):
 
         obs_batch = jnp.stack([obs[a] for a in env.agents]).reshape(-1, *env.observation_space()[0].shape)
-        network = ActorCritic(action_dim=env.action_space().n, activation="relu")  # 使用与训练时相同的参数
+        network = ActorCritic(action_dim=env.action_space().n, activation="relu")  # use the same parameters as during training
         pi, _ = network.apply(params, obs_batch)
         rng, _rng = jax.random.split(rng)
         actions = pi.sample(seed=_rng)
