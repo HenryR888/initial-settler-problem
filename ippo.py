@@ -152,18 +152,22 @@ class ActorCritic(nn.Module):
 
         return pi, jnp.squeeze(critic.astype(jnp.float32), axis=-1)
 
-
+# NamedTuple allows for python to call objects like t.action or t.state, instead of indexing like t[0], t[1]...
+# This transition allows us to store all the information for a specific time step
 class Transition(NamedTuple):
-    done: jnp.ndarray
-    action: jnp.ndarray
-    value: jnp.ndarray
-    reward: jnp.ndarray
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
-    info: jnp.ndarray
+    done: jnp.ndarray # did the episode end at this step?
+    action: jnp.ndarray # action the agent took
+    value: jnp.ndarray # V(s_t)
+    reward: jnp.ndarray # r_t
+    log_prob: jnp.ndarray # taking log of policy (log_theta(pi(a_t |s_t)))
+    obs: jnp.ndarray # observation taken by agent
+    info: jnp.ndarray # some extra info that we can log later on
 
 
 def get_rollout(params, config):
+    '''
+    Just getting rollout data, which is done after training for visualisation.
+    '''
     env = Clean_up(**config["ENV_KWARGS"])
 
     network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
@@ -198,16 +202,16 @@ def get_rollout(params, config):
     return state_seq
 
 
-def batchify(x: dict, agent_list, num_actors):
+def batchify(x: dict, agent_list, num_actors): # convert to format (batched tensor) that neural network expects
     x = jnp.stack([x[:, a] for a in agent_list])
     return x.reshape((num_actors, -1))
 
-def batchify_dict(x: dict, agent_list, num_actors):
+def batchify_dict(x: dict, agent_list, num_actors): # same thing as above, but this is done if the dictionary keys are strings
     x = jnp.stack([x[str(a)] for a in agent_list])
     return x.reshape((num_actors, -1))
 
 
-def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
+def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors): # Now we reverse the above by converting the batched array into the dictionary format, which is going to be what our step function in the environment expects
     x = x.reshape((num_actors, num_envs, -1))
     return {a: x[i] for i, a in enumerate(agent_list)}
 
@@ -226,13 +230,13 @@ def gini_coefficient(values):
     sorted_values = jnp.sort(values)
     n = len(sorted_values)
     
-    # Handle edge cases
+    # total reward from agents
     total = jnp.sum(sorted_values)
     
     # If all values are zero, return 0 (perfect equality)
     gini = jax.lax.cond(
         total == 0,
-        lambda: 0.0,
+        lambda: 0.0, # handle the edge case
         lambda: (2 * jnp.sum(jnp.arange(1, n + 1) * sorted_values) / (n * total) - (n + 1) / n)
     )
     
