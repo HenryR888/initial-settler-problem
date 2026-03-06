@@ -244,22 +244,29 @@ def gini_coefficient(values):
 
 
 def make_train(config):
+    '''
+    This function amalgamates all functions needed to do the training of our net using PPO...first we instantiate everything according to our ENV KWARGS
+    '''
     env = Clean_up(**config["ENV_KWARGS"])
 
-    config["NUM_ACTORS"] = env.num_agents * config["NUM_ENVS"]
+    config["NUM_ACTORS"] = env.num_agents * config["NUM_ENVS"] # this is the total number of agent-trajectories...i.e. (number of agents per environment) x (number of environments being run in parallel)
 
+    # total number of outer updates PPO does
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
-
+    # splitting up the number of steps throughout all environments in minibatches, and taking the size of those minibatches
     config["MINIBATCH_SIZE"] = (
         config["NUM_ACTORS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    env = LogWrapper(env, replace_info=False)
+    env = LogWrapper(env, replace_info=False) # enable logging for statistics and tracking
 
-
+   
     def linear_schedule(count):
+        '''
+        anneal the learning rate, linearly
+        '''
         frac = (
             1.0
             - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]))
@@ -268,14 +275,16 @@ def make_train(config):
         return config["LR"] * frac
 
     def train(rng):
-
+        '''
+        Here we perform the entire training run.
+        '''
         # INIT NETWORK
         network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
 
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros((1, *(env.observation_space()[0]).shape))
+        init_x = jnp.zeros((1, *(env.observation_space()[0]).shape)) # here we create a dummy tensor in order to initialise our network in the next step.
 
-        network_params = network.init(_rng, init_x)
+        network_params = network.init(_rng, init_x) # initialising neural network with dummy tensor (batch, width, height, channels)...these are the tensors that we shall pass into our Neural Net which come from our CNN
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -288,6 +297,7 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
+        # this guy stores everything we need to train the model in one object: the params, how to run the net (apply_fn), the optimiser from above (tx)
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
@@ -296,11 +306,17 @@ def make_train(config):
 
         # INIT ENV
         rng, _rng = jax.random.split(rng)
-        reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-        obsv, env_state = jax.vmap(env.reset, in_axes=(0,))(reset_rng)
+        reset_rng = jax.random.split(_rng, config["NUM_ENVS"]) # each parallel environment gets its own reset randomness by splitting the keys
+        obsv, env_state = jax.vmap(env.reset, in_axes=(0,))(reset_rng) # reset all at once
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
+            '''
+            This function corresponds to one outer PPO update. 
+            1.) collect trajectories
+            2.) compute the advantages
+            3.) update the network with PPO
+            '''
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, update_step, rng = runner_state
@@ -308,27 +324,31 @@ def make_train(config):
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
                 
-                obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *(env.observation_space()[0]).shape)
+                # SOME Qs: When exactly are we obtaining this observation? 
+                obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *(env.observation_space()[0]).shape) # flattens environments and agent axes together, to obtain one batch of all actor observations to feed into the network
                 
+                # ! IMPORTANT: Here is where we apply the network...we give the network the current params of our CNN, and the observation batch of all agents from all environments that we flattened above, and feed forward through the CNN, then this returns the policy distribution (output) from our actor head
+                # and then the value estimate for each actor observation (from the critic head)
                 pi, value = network.apply(train_state.params, obs_batch)
-                action = pi.sample(seed=_rng)
-                log_prob = pi.log_prob(action)
+                action = pi.sample(seed=_rng) # for each observation of each agent, we sample an action from the policy
+                log_prob = pi.log_prob(action) # for the PPO alg, we need the log of that prob from the sampled action
                 env_act = unbatchify(
-                    action, env.agents, config["NUM_ENVS"], env.num_agents
+                    action, env.agents, config["NUM_ENVS"], env.num_agents # unflattening the action tensor to fit what environment expects 
                 )
 
-                env_act = [v for v in env_act.values()]
+                env_act = [v for v in env_act.values()] # convert the dictionary values in a list for env.step
                 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
 
+                # this steps all the environments in parallel at the same time
                 obsv, env_state, reward, done, info = jax.vmap(
                     env.step, in_axes=(0, 0, 0)
                 )(rng_step, env_state, env_act)
                 
                 info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
-                transition = Transition(
+                transition = Transition( # as in the transition class defined earlier, this stores the transition object for this particular time step, which is what PPO needs later (log prob and value specifically)
                     batchify_dict(done, env.agents, config["NUM_ACTORS"]).squeeze(),
                     action,
                     value,
@@ -338,18 +358,18 @@ def make_train(config):
                     info,
                     )
 
-                runner_state = (train_state, env_state, obsv, update_step, rng)
+                runner_state = (train_state, env_state, obsv, update_step, rng) # this updates the observation, and it is where the env_state gets updated
                 return runner_state, transition
 
             runner_state, traj_batch = jax.lax.scan(
-                _env_step, runner_state, None, config["NUM_STEPS"]
+                _env_step, runner_state, None, config["NUM_STEPS"] # this repeats the _env_step function for "NUM_STEPS" times...so we have a full trajectory batch before updating 
             )
 
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, update_step, rng = runner_state
 
             last_obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *(env.observation_space()[0]).shape)
-            _, last_val = network.apply(train_state.params, last_obs_batch)
+            _, last_val = network.apply(train_state.params, last_obs_batch) # we need the final value of the next state to compute our advantage using GAE
 
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
@@ -360,6 +380,7 @@ def make_train(config):
                         transition.reward,
                     )
 
+                    # Temporal Difference residual is computed: delta_t = r_t + gamma.V(s_{t+1})(1-d_t) - V(s_t)
                     delta = reward + config["GAMMA"] * next_value * (1 - done) - value
                     gae = (
                         delta
