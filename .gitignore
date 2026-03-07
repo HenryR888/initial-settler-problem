@@ -1,5 +1,8 @@
 __pycache__/
+*.pyc
 random_actions_gif/
 wandb/
 checkpoints
 .venv/
+.claude/
+.DS_Store
