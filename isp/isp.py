@@ -24,33 +24,24 @@ from .rendering import (
     rotate_fn,
 )
 
-NUM_TYPES = 4  # empty (0), red (1), blue, red coin, blue coin, wall, interact
-NUM_COIN_TYPES = 1
-INTERACT_THRESHOLD = 0
-
+# Define the Global Ground Truth State for the ISP Environment:
 
 @dataclass
 class State:
-    agent_locs: jnp.ndarray # tracks the grid location of the agents
-    agent_invs: jnp.ndarray 
-    inner_t: int 
-    outer_t: int
-    grid: jnp.ndarray
+    agent_locs: jnp.ndarray # (n,3)...2d tensor, with rows representing agent index, and 3 columns - x,y, and direction agent is facing
+    river_level: jnp.ndarray # scalar value...representing the global hidden resource (health) level of the river, R_t in [0,1]
+    energy: jnp.ndarray     # (n,)...1d tensor (vector), representing private energy level, e_i in [0,1]
+    reputations: jnp.ndarray # (n,)...1d tensor (vector), representing the public reoutation score for each agent, ro in [0,1] - updated this from ro in Reals, to make it simpler 
+    cumulative_harvest: jnp.ndarray # (n,)...1d tensor (vector), representing cumulative harvest, which will be used in Greed Metric Q_{t,j} 
+    cumulative_invest: jnp.ndarray # (n,)...1d tensor (vector), representing cumulative invest, which will also be used in Greed Metric Q_{t,j}
+    num_steps_below_collapse: jnp.ndarray # number of consecutive steps for which R_t < K (collapse threshold)
+    grid: jnp.ndarray # (H,W)...that is the (height, width) of the spatial grid in which the agents operate
+    inner_t: int # current timestep within episode
+    outer_t: int # current episode index number
 
-    apples: jnp.ndarray
-    freeze: jnp.ndarray
-    reborn_locs: jnp.ndarray
-
-    potential_dirt_and_dirt_locs: jnp.ndarray
-    potential_dirt_and_dirt_label: jnp.ndarray
-    smooth_rewards: jnp.ndarray
-    cumulative_apples_collected: jnp.ndarray
+    # ! still need to add last_claims, which will be a vector which keeps track of last claim made by agents for the Lie metric...I will come back to this once adding communication action !
 
 
-@chex.dataclass
-class EnvParams:
-    payoff_matrix: chex.ArrayDevice
-    freeze_penalty: int
 
 class Actions(IntEnum):
     turn_left = 0
