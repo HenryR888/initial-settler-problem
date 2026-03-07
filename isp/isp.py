@@ -42,6 +42,7 @@ class State:
     # ! still need to add last_claims, which will be a vector which keeps track of last claim made by agents for the Lie metric...I will come back to this once adding communication action !
 
 
+# Define the Action Set:
 
 class Actions(IntEnum):
     turn_left = 0
@@ -50,10 +51,13 @@ class Actions(IntEnum):
     right = 3
     up = 4
     down = 5
-    stay = 6
-    zap_forward = 7
-    zap_clean = 8
+    stay = 6 # this will be equivalent to our NoOp action, in which the agent's energy level would change by clip(e_{t,i}+g,0,1)
+    harvest = 7 # the agent harvests from the river (imagine it being water/fish), in which case the agent's energy increases by += beta_h, and the associated river damage (D_t,i) is -= gamma_h
+    invest = 8 # the agent invests into maintaining/repairing river...energy reduces by -=beta_v, where beta_v > beta_h to ensure strategic non-triviality of pro-river-investment...moreover, associated river health contribution is gamma_v, where gamma_v > beta_v
 
+    # ! Note: that Punish(j) is defined within the __init__ module further down, since we cannot parametrise Punish within this actions class object. We put it in __init__ module specifically, because that is where the number of agents first becomes known 
+
+    # ! Note: we will come back to adding the communcation action set, as  I want to get the core dynamics of ISP working first before adding additional complexity
 
 class Items(IntEnum):
     empty = 0
