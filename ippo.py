@@ -381,44 +381,54 @@ def make_train(config):
                     )
 
                     # Temporal Difference residual is computed: delta_t = r_t + gamma.V(s_{t+1})(1-d_t) - V(s_t)
+                    # remember gae is calculating the advantage which will be used to update our policy
                     delta = reward + config["GAMMA"] * next_value * (1 - done) - value
-                    gae = (
+                    gae = ( # delta_t + (gamma.lambda)(delta_t+1)
                         delta
                         + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
                     )
                     return (gae, value), gae
                 
-                _, advantages = jax.lax.scan(
+                _, advantages = jax.lax.scan( # we obtain the advantages every time step and actor here
                     _get_advantages,
                     (jnp.zeros_like(last_val), last_val),
                     traj_batch,
                     reverse=True,
                     unroll=16,
                 )
-                return advantages, advantages + traj_batch.value
+                return advantages, advantages + traj_batch.value # this second parameter that is returned is the target (Q(s,a) = A_t + V(s_t))...which is what is used to train the critic network
 
             advantages, targets = _calculate_gae(traj_batch, last_val)
 
-            # UPDATE NETWORK
+            # UPDATE NETWORK for one epoch...remember we'll do multiple passes over the same rollout data
             def _update_epoch(update_state, unused, i):
                 def _update_minbatch(train_state, batch_info, network_used):
-                    traj_batch, advantages, targets = batch_info
+                    '''
+                    gradient descent for one minibatch
+                    '''
+                    traj_batch, advantages, targets = batch_info # unpack the mini batch data
 
                     def _loss_fn(params, traj_batch, gae, targets, network_used):
-                        # RERUN NETWORK
+                        # RERUN NETWORK...we do this because above, within the transition object, we stored the old log prob, action and value...now with PPO, we want to compare our current action/value/log_prob to our old ones to updates params accordingly
                         pi, value = network_used.apply(params, traj_batch.obs)
                         log_prob = pi.log_prob(traj_batch.action)
                         # CALCULATE VALUE LOSS
+
+                        # V_param^{clip}(s_t) = V_old(s_t) + clip(V_param(s_t)-V_old, -eps, eps)...where V_param is the value calculated with the current params 
                         value_pred_clipped = traj_batch.value + (
                             value - traj_batch.value
                         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
+                        # Now we compute two losses, Loss1 = (V_param - target)^2
                         value_losses = jnp.square(value - targets)
-                        value_losses_clipped = jnp.square(value_pred_clipped - targets)
+                        value_losses_clipped = jnp.square(value_pred_clipped - targets) # the second loss computed is Loss_2 = (V_clipped - target)^2
                         value_loss = (
                             0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
-                        )
+                        ) # because we trained over a whole batch and we now have two vectors of losses, we compute the mean of the maximum values, to smooth out the variance and then the 0.5 actually simplifies the grad calc
+                        # also note here that we take the maximum of the two losses in order to penalise the largest error
 
                         # CALCULATE ACTOR LOSS
+                        # this is just pi_param/pi_old ratio
+                        # Remember that we use log probs instead of prob for numerical stability...in our nets, sometimes the actual probs can be 0.000004 say and 0.00002 and dividing by these numbers, we could have floating point underflow, which results in us dividing by zero and exploding gradients happen...log probs fix this
                         ratio = jnp.exp(log_prob - traj_batch.log_prob)
                         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
                         loss_actor1 = ratio * gae
