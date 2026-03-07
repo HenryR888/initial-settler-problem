@@ -59,19 +59,14 @@ class Actions(IntEnum):
 
     # ! Note: we will come back to adding the communcation action set, as  I want to get the core dynamics of ISP working first before adding additional complexity
 
+
 class Items(IntEnum):
     empty = 0
     wall = 1
-    interact = 2
-    apple = 3
-    spawn_point = 4
-    inside_spawn_point = 5
-    river = 6
-    potential_dirt = 7
-    dirt = 8
-    clean_beam = 9
+    river = 2 # these shall be the river tiles for our environment...the agents will be able to harvest/invest when standing on or adjacent to these tiles.
 
 
+# 0th index is for row changes; 1st index is for column changes; 2nd index is for direction changes
 ROTATIONS = jnp.array(
     [
         [0, 0, 1],  # turn left
@@ -81,8 +76,10 @@ ROTATIONS = jnp.array(
         [0, 0, 0],  # up
         [0, 0, 0],  # down
         [0, 0, 0],  # stay
-        [0, 0, 0],  # zap
-        [0, 0, 0],  # zap_clean
+        [0, 0, 0],  # harvest (does not change direction that the agent is facing)
+        [0, 0, 0],  # invest (does not change direction that the agent is facing)
+        
+        # ! Note: We will add the Punish(j) row dynamically within the __init__ module 
     ],
     dtype=jnp.int8,
 )
@@ -99,38 +96,26 @@ STEP = jnp.array(
 
 STEP_MOVE = jnp.array(
     [
-        [0, 0, 0],
-        [0, 0, 0],
-        [0, 1, 0],  
-        [0, -1, 0],  
-        [1, 0, 0],  
-        [-1, 0, 0],  
-        [0, 0, 0],
-        [0, 0, 0],
+        [0, 0, 0], # turn left
+        [0, 0, 0], # turn right
+        [0, 1, 0], # left
+        [0, -1, 0], # right  
+        [1, 0, 0], # up  
+        [-1, 0, 0], # down  
+        [0, 0, 0], # stay
+        [0, 0, 0], # harvest
+        [0, 0, 0], # invest
+
+         # ! Note: We will add the Punish(j) row dynamically within the __init__ module 
     ],
     dtype=jnp.int8,
 )
 
 char_to_int = {
-    'W': 1, # Wall Tiles for the environment
-    ' ': 0, # empty Tile 0
-    'A': 3,  # exist apple, not used in this environment
-    'P': 4, # spawn_point - Where agents may spawn
-    'Q': 5,  # spawn_point defence, not used in this environment
-    'B': 6, # potential_apple - Where apples may regrow
-    'S': 7, # river tiles
-    'H': 8, # potential_dirt - where dirt can accumulate
-    'F': 9, # actual_dirt - initial dirt 
-    '+': 0, # should be "sand", "shadow_e", "shadow_n"
-    'f': 0, # should be "sand", "shadow_e", "shadow_n"
-    ";": 0,
-    ",": 0,
-    "^": 0,
-    "=": 0,
-    ">": 0,
-    "<": 0,
-    "~": 7, # check this and try to delete it to see if necessary
-    "T": 6, # check this and try to delete it to see if necessary
+    ' ': 0, # empty tile
+    'W': 1, # wall
+    'R': 2, # river tile
+    'P': 3, # spawn point for agents, which is only used when we reset environement
 }
 
 def ascii_map_to_matrix(map_ASCII, char_to_int):
@@ -201,18 +186,17 @@ class Clean_up(MultiAgentEnv):
         cnn=True,
         agent_ids=False,
 
+        # This is a 15x9 gridworld which we have proposed, on the basis that we will use 3 agents to start out. There are walls on the left and right and bottom of the environment to prevent the agents walking out. 
+        # the reason for the wall between the river and the agents living area is to prevent an agent just being able stand next to a river for infinite time and continue harvesting/investing...they actually need to make a choice to leave the living area and enter the river to harvest/invest
         map_ASCII = [
-                'HFHFHFFHFHFHFH',
-                'HFFHFFHHFHFHFH',
-                'HFHFHFFHFHFHFH',
-                'HFFFFFFHFHFHFH',
-                '==============',
-                '   P    P     ',
-                '     P     P  ',
-                '^T^T^T^T^T^T^T',
-                'BBBBBBBBBBBBBB',
-                'BBBBBBBBBBBBBB',
-                'BBBBBBBBBBBBBB',
+                'WRRRRRRRRRRRRRW',
+                'WRRRRRRRRRRRRRW',
+                'WRRRRRRRRRRRRRW',
+                'WWWWWWWWWWWWWWW',
+                '   P    P    P ',
+                '  P    P    P  ',
+                '   P    P    P ',
+                'WWWWWWWWWWWWWWW',
             ]
     ):
 
