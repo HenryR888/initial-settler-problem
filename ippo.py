@@ -35,8 +35,8 @@ CONFIG = {
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95, # used within the Generalised Advantage Estimator for A_t
     "CLIP_EPS": 0.2, # epsilon in the clip objective function...interpretation is that policy is not allowed to change by more than 20% per update step...remember that if we have one bad gradient step then the policy collapses.
-    "ENT_COEF": 0.01, # entropy coef
-    "VF_COEF": 0.5,
+    "ENT_COEF": 0.01, # entropy coef for total loss to encourage agent exploration
+    "VF_COEF": 0.5, # value loss coefficient for total loss equation
     "MAX_GRAD_NORM": 0.5, # prevents exploding gradients
     "ACTIVATION": "relu",
     "ENV_NAME": "clean_up",
@@ -430,9 +430,9 @@ def make_train(config):
                         # this is just pi_param/pi_old ratio
                         # Remember that we use log probs instead of prob for numerical stability...in our nets, sometimes the actual probs can be 0.000004 say and 0.00002 and dividing by these numbers, we could have floating point underflow, which results in us dividing by zero and exploding gradients happen...log probs fix this
                         ratio = jnp.exp(log_prob - traj_batch.log_prob)
-                        gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-                        loss_actor1 = ratio * gae
-                        loss_actor2 = (
+                        gae = (gae - gae.mean()) / (gae.std() + 1e-8) # normalise the advantage, which stabilises increase/decrease of params in update step
+                        loss_actor1 = ratio * gae #pi_param/pi_old * A_t
+                        loss_actor2 = ( # clipped part of the final loss function
                             jnp.clip(
                                 ratio,
                                 1.0 - config["CLIP_EPS"],
@@ -440,9 +440,9 @@ def make_train(config):
                             )
                             * gae
                         )
-                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
-                        loss_actor = loss_actor.mean()
-                        entropy = pi.entropy().mean()
+                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2) # take conservative loss which we want to  minimise, that is why we use minimum. Moreover, the neg sign is there because PPO actually seeks to maximise J(theta)...but here in the gradient-based method, we seek to minimise a loss function, which is why we take the negative of it
+                        loss_actor = loss_actor.mean() # take the mean because we will have a vector of per sample losses.  
+                        entropy = pi.entropy().mean() # we add this entropy bonus term here so that the agent continues to explore the environment, and does not settle on some local minimum too soon
 
                         total_loss = (
                             loss_actor
@@ -453,35 +453,36 @@ def make_train(config):
 
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
+                    # evaluate the current loss and grads wrt current params
                     total_loss, grads = grad_fn(
                             train_state.params, traj_batch, advantages, targets, network_used
                         )
-                    train_state = train_state.apply_gradients(grads=grads)
+                    train_state = train_state.apply_gradients(grads=grads) # apply optimiser so that params get updated
                     return train_state, total_loss
 
-                train_state, traj_batch, advantages, targets, rng = update_state
-                rng, _rng = jax.random.split(rng)
+                train_state, traj_batch, advantages, targets, rng = update_state 
+                rng, _rng = jax.random.split(rng) 
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
                 assert (
                     batch_size == config["NUM_STEPS"] * config["NUM_ACTORS"]
                 ), "batch size must be equal to number of steps * number of actors"
-                permutation = jax.random.permutation(_rng, batch_size)
+                permutation = jax.random.permutation(_rng, batch_size) 
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(
                         lambda x: x.reshape((batch_size,) + x.shape[2:]), batch
                     )
 
-                shuffled_batch = jax.tree_util.tree_map(
+                shuffled_batch = jax.tree_util.tree_map( # randomise the rollout data, as the rollout data that was collected is sequential, and we want to avoid correlation between transitions
                     lambda x: jnp.take(x, permutation, axis=0), batch
                 )
-                minibatches = jax.tree_util.tree_map(
+                minibatches = jax.tree_util.tree_map( # split the shuffled rollout data into minibatches
                     lambda x: jnp.reshape(
                         x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])
                     ),
                     shuffled_batch,
                 )
 
-                train_state, total_loss = jax.lax.scan(
+                train_state, total_loss = jax.lax.scan( # run gradient update step through each of the minibatches, and then update network params
                     lambda state, batch_info: _update_minbatch(state, batch_info, network), train_state, minibatches
                 )
 
@@ -491,7 +492,7 @@ def make_train(config):
             
             update_state = (train_state, traj_batch, advantages, targets, rng)
             update_state, loss_info = jax.lax.scan(
-                lambda state, unused: _update_epoch(state, unused, 0), update_state, None, config["UPDATE_EPOCHS"]
+                lambda state, unused: _update_epoch(state, unused, 0), update_state, None, config["UPDATE_EPOCHS"] # repeat the same update_epoch step for number of epochs
             )
             train_state = update_state[0]
             metric = traj_batch.info
@@ -529,7 +530,8 @@ def make_train(config):
             
             metric = jax.tree_map(lambda x: x.mean(), metric)
 
-            metric["update_step"] = update_step
+            # these can be used as useful x axes for training curves
+            metric["update_step"] = update_step 
             metric["env_step"] = update_step * config["NUM_STEPS"] * config["NUM_ENVS"]
 
             metric["update_step"] = update_step
@@ -554,7 +556,7 @@ def make_train(config):
 
 def single_run(config):
     config = CONFIG
-
+    # wandb stores metrics for every run
     wandb.init(
         entity=config["ENTITY"],
         project=config["PROJECT"],
@@ -575,6 +577,7 @@ def single_run(config):
     filename = f'{config["ENV_NAME"]}_seed{config["SEED"]}'
     train_state = jax.tree_map(lambda x: x[0], out["runner_state"][0])
 
+    # Save the training params
     save_path = f"./checkpoints/indvidual/{filename}.pkl"
     save_params(train_state, save_path)
     params = load_params(save_path)
@@ -614,7 +617,7 @@ def evaluate(params, env, save_path, config):
     for o_t in range(config["GIF_NUM_FRAMES"]):
 
         obs_batch = jnp.stack([obs[a] for a in env.agents]).reshape(-1, *env.observation_space()[0].shape)
-        network = ActorCritic(action_dim=env.action_space().n, activation="relu")  # use the same parameters as during training
+        network = ActorCritic(action_dim=env.action_space().n, activation="relu")  # apply the trained params to the current obs
         pi, _ = network.apply(params, obs_batch)
         rng, _rng = jax.random.split(rng)
         actions = pi.sample(seed=_rng)
