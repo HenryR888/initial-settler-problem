@@ -1740,3 +1740,73 @@ class Clean_up(MultiAgentEnv):
             xmax = (i + 1) * tile_width
             img[ymin:ymax, xmin:xmax, :] = onp.int8(255)
         return img
+    
+# ISP ENVIRONMENT 
+
+class ISP(MultiAgentEnv):
+
+    title_cache = {}
+
+    def __init__(
+            self,
+            num_agents=3,
+            num_inner_steps=200, # length of episode
+            num_outer_steps=1, # number of episodes ran
+            # river regeneration hyperparams (a.k.a. ecological hyperparams):
+            # EQUATION for ease of reference: R_{t+1} = clip(R_t + alpha.R_t(1-R_t) - DD_t + I_t + eps_t, 0, 1)
+            alpha=0.3, # intrinsic logistic regen rate 
+            beta_h=0.1, # energy gain per harvest action
+            gamma_h=0.1, # river damage per harvest action for (D_t,i in regen function)
+            beta_v = 0.2, # energy loss per invest action
+            gamma_v=0.3, # river health increase per invest (for I_t in regen function)
+            g = 0.01, # NoOp energy gain for agent not doing anything at that specific number step
+            K_collapse_thresh = 0.1, # river health level collapse threshold (after k steps below threshold, episode transitions into terminal state)
+            k_collapse_steps = 5, # number of steps below K before episode collapses
+            sigma_noise = 0.05, # standard deviation for Normal distribution for noise
+            #reward function hyperparams:
+            w_f=1.0, # weight for delta energy
+            w_h = 5.0, # weight for Indicator function for agent being below survival threshold...if agent is below threshold - huge penalty
+            w_c = 1.0, # weight for indicator function for river health being below K collapse shreshold
+            w_p=0.1, # weight for indicator function for agent being punished
+            lambda_h = 0.1, # hunger threshold for energy level
+            #lambda_c=0.2, # river collapse hyperparam...we shall start with K as this value, but might provide interesting dynamics to have different K values with lambdda_c to start penalising agents earlier rather than later
+            c_pun=0.08, # energy cost for agent to punish someone else
+            c_rec=0.16, # energy cost for agent who is receiving punishment
+            jit = True,
+            obs_size=11, # each agent has fov of 11x11 tiles within grid
+            cnn=True,
+            agent_ids=False,
+            # This is a 15x9 gridworld which we have proposed, on the basis that we will use 3 agents to start out. There are walls on the left and right and bottom of the environment to prevent the agents walking out. 
+            # the reason for the wall between the river and the agents living area is to prevent an agent just being able stand next to a river for infinite time and continue harvesting/investing...they actually need to make a choice to leave the living area and enter the river to harvest/invest
+            map_ASCII = [
+                    'WRRRRRRRRRRRRRW',
+                    'WRRRRRRRRRRRRRW',
+                    'WRRRRRRRRRRRRRW',
+                    'WWWWWWWWWWWWWWW',
+                    '   P    P    P ',
+                    '  P    P    P  ',
+                    '   P    P    P ',
+                    'WWWWWWWWWWWWWWW',
+                ]
+    ):
+        super().__init__(num_agents=num_agents)
+
+        self.alpha=alpha
+        self.beta_h = beta_h
+        self.gamma_h=gamma_h
+        self.gamma_v = gamma_v
+        self.g = g
+        self.K_collapse_thresh = K_collapse_thresh
+        self.k_collapse_steps= k_collapse_steps
+        self.sigma_noise = sigma_noise
+        self.w_f = w_f
+        self.w_h = w_h
+        self.w_c = w_c
+        self.w_p = w_p
+        self.lambda_h = lambda_h
+        self.c_pun = c_pun
+        self.c_rec = c_rec
+        self.cnn = cnn
+        self.agent_ids = agent_ids
+        self.num_inner_steps = num_inner_steps
+        self.num_outer_steps = num_outer_steps
