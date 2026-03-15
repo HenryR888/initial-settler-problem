@@ -1793,6 +1793,7 @@ class ISP(MultiAgentEnv):
 
         self.alpha=alpha
         self.beta_h = beta_h
+        self.beta_v = beta_v
         self.gamma_h=gamma_h
         self.gamma_v = gamma_v
         self.g = g
@@ -1810,3 +1811,39 @@ class ISP(MultiAgentEnv):
         self.agent_ids = agent_ids
         self.num_inner_steps = num_inner_steps
         self.num_outer_steps = num_outer_steps
+
+        self.agents = list(range(num_agents)) # indexing agents 
+        self._agents = jnp.array(self.agents, dtype=jnp.int16) + len(Items) # we need to offset agents by number of items we have in the grid so we know what each tile within the grid contains
+
+        self.PLAYER_COLOURS = generate_agent_colors(num_agents) # agent rendering colours
+
+        # grid dimensions are as follows:
+        self.GRID_SIZE_ROW = len(map_ASCII)
+        self.GRID_SIZE_COL = max(len(row) for row in map_ASCII)
+        self.OBS_SIZE = obs_size
+        self.PADDING = self.OBS_SIZE -1 
+
+        GRID = jnp.zeros(
+            (self.GRID_SIZE_ROW + 2 * self.PADDING, self.GRID_SIZE_COL + 2*self.PADDING),
+            dtype=jnp.int16,
+        )
+        GRID = GRID.at[self.PADDING - 1, :].set(Items.wall)
+        GRID = GRID.at[:, self.PADDING - 1].set(Items.wall)
+        self.GRID = GRID.at[:, self.GRID_SIZE_COL + self.PADDING].set(Items.wall)
+
+        def find_positions(grid_array, value):
+            return jnp.array(jnp.where(grid_array == value)).T
+        
+        nums_map = ascii_map_to_matrix(map_ASCII, char_to_int)
+        self.RIVER = find_positions(nums_map, char_to_int['R']) # river tiles...i.e. harvest/invest zone
+        self.SPAWNS_PLAYERS = find_positions(nums_map, char_to_int['P']) # agent spawn locations
+        self.SPAWNS_WALL = find_positions(nums_map, char_to_int['W']) # wall tiles
+
+        # Define Punish(j) action. Note that '9+j', means "punish agent j":
+        self.PUNISH_ACTIONS = {j: 9+j for j in range(num_agents)}
+
+        # from above, we add the dynamics for punish(j) for rotations and step_move, which do not move or rotate any agent when punishing an agent
+        punish_rows = jnp.zeros((num_agents,3), dtype = jnp.int8)
+        self.ROTATIONS = jnp.concatenate([ROTATIONS,punish_rows], axis=0)
+        self.STEP_MOVE = jnp.concatenate([STEP_MOVE, punish_rows], axis=0)
+
