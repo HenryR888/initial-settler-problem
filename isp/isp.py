@@ -2019,3 +2019,98 @@ class ISP(MultiAgentEnv):
                 [False] * collisions.shape[0]
             )
             return ((k2, collided_moved, collision_matrix, agent_locs, new_agent_locs), new_agent_locs)
+
+
+        def _get_obs_point(agent_loc: jnp.ndarray) -> jnp.array:
+            '''
+            Obtain the position of top-left corner of obs map using
+            agent's current location & orientation.
+
+            Args: 
+                - agent_loc: jnp.ndarray, agent x, y, direction.
+            Returns:
+                - x, y: ints of top-left corner of agent's obs map.
+            '''
+            x, y, direction = agent_loc
+            x, y = x + self.PADDING, y + self.PADDING
+            x = x - (self.OBS_SIZE // 2)
+            y = y - (self.OBS_SIZE // 2)
+            x = jnp.where(direction == 0, x + (self.OBS_SIZE // 2) - 1, x)
+            x = jnp.where(direction == 2, x - (self.OBS_SIZE // 2) + 1, x)
+            y = jnp.where(direction == 1, y + (self.OBS_SIZE // 2) - 1, y)
+            y = jnp.where(direction == 3, y - (self.OBS_SIZE // 2) + 1, y)
+            return x, y
+        
+        def rotate_grid(agent_loc: jnp.ndarray, grid: jnp.ndarray) -> jnp.ndarray:
+            '''
+            Rotates agent's observation grid by 0/90/180/270 degrees based on direction.
+            Uses a data-dependent branch to avoid computing all rotations. 
+            This aligns the world to that specific agent's facing-direction (egocentric), so that the CNN policy
+            training becomes dramatically easier.
+            '''
+            def rot0(g): return g
+            def rot1(g): return jnp.rot90(g, k=1, axes=(0, 1))
+            def rot2(g): return jnp.rot90(g, k=2, axes=(0, 1))
+            def rot3(g): return jnp.rot90(g, k=3, axes=(0, 1))
+            return jax.lax.switch(jnp.asarray(agent_loc[2], jnp.int32), [rot0, rot1, rot2, rot3], grid)
+        
+        def _get_obs(state: State) -> jnp.ndarray:
+            '''
+            Obtain the agent's observation of the grid.
+
+            Args: 
+                - state: State object containing env state.
+            Returns:
+                - jnp.ndarray of grid observation.
+            '''
+            # pad grid with walls for out-of-bounds cells
+            grid = jnp.pad(
+                state.grid,
+                ((self.PADDING, self.PADDING), (self.PADDING, self.PADDING)),
+                constant_values=Items.wall,
+            )
+            # get top-left corner of each agent's obs window
+            agent_start_idxs = jax.vmap(_get_obs_point)(state.agent_locs)
+
+            dynamic_slice = partial(
+                jax.lax.dynamic_slice,
+                operand=grid,
+                slice_sizes=(self.OBS_SIZE, self.OBS_SIZE),
+            )
+
+            # slice and rotate to egocentric frame
+            grids = jax.vmap(dynamic_slice)(start_indices=agent_start_idxs)
+            grids = jax.vmap(rotate_grid)(state.agent_locs, grids)
+
+            # one-hot encode so the categories are (empty, wall, river, agent_0, agent_1, ...)
+            # shift by -1 so empty(0)->-1 gets zeroed out by one_hot...because it contains no additional info, wall(1)->0, etc.
+            # num classes = len(Items) - 1 + num_agents  (drop empty block and keep wall, river, agents)
+            num_classes = len(Items) - 1 + num_agents
+            grids = jax.nn.one_hot(grids - 1, num_classes, dtype=jnp.int8)
+            # grids shape: (num_agents, OBS_SIZE, OBS_SIZE, num_classes)
+
+            
+            def add_scalar_channels(grid,agent_idx):
+                '''
+                add river channel and energy channel to one-hot encoded vector, which we will later pass into CNN in IPPO...
+                !Note that here we just add the 2 channels as part of the whole channel, but CNN should learn to recognise these are constants thus ignore. 
+                When we add GRU with communication action, this will have to change
+                '''
+                # noisy river estimate for this agent: shape (OBS_SIZE, OBS_SIZE, 1)
+                river_ch = jnp.full(
+                    (self.OBS_SIZE, self.OBS_SIZE, 1),
+                    state.river_obs[agent_idx],
+                    dtype=jnp.float32,
+                )
+                # agent's own energy: shape (OBS_SIZE, OBS_SIZE, 1)
+                energy_ch = jnp.full(
+                    (self.OBS_SIZE, self.OBS_SIZE, 1),
+                    state.energy[agent_idx],
+                    dtype=jnp.float32,
+                )
+                return jnp.concatenate([grid, river_ch, energy_ch], axis=-1)
+            
+            grids = jax.vmap(add_scalar_channels, in_axes=(0,0)) (
+                grid.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
+            )
+            return grids # shape is: (num_agents, OBS_SIZE, OBS_SIZR, num_classes + 2...for river channel and energy channel included)
