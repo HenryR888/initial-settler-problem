@@ -35,6 +35,7 @@ class State:
     cumulative_harvest: jnp.ndarray # (n,)...1d tensor (vector), representing cumulative harvest, which will be used in Greed Metric Q_{t,j} 
     cumulative_invest: jnp.ndarray # (n,)...1d tensor (vector), representing cumulative invest, which will also be used in Greed Metric Q_{t,j}
     num_steps_below_collapse: jnp.ndarray # number of consecutive steps for which R_t < K (collapse threshold)
+    river_obs = jnp.ndarray # (n,)...1d tenstor vector, representing the per-agent noisy river estimate 
     grid: jnp.ndarray # (H,W)...that is the (height, width) of the spatial grid in which the agents operate
     inner_t: int # current timestep within episode
     outer_t: int # current episode index number
@@ -1847,3 +1848,174 @@ class ISP(MultiAgentEnv):
         self.ROTATIONS = jnp.concatenate([ROTATIONS,punish_rows], axis=0)
         self.STEP_MOVE = jnp.concatenate([STEP_MOVE, punish_rows], axis=0)
 
+
+        # Collision logic from CLEANUP: 
+        def check_collision(
+                new_agent_locs: jnp.ndarray
+            ) -> jnp.ndarray:
+            '''
+            Function to check agent collisions.
+            
+            Args:
+                - new_agent_locs: jnp.ndarray, the agent locations at the 
+                current time step.
+                
+            Returns:
+                - jnp.ndarray matrix of bool of agents in collision.
+            '''
+            matcher = jax.vmap(
+                lambda x,y: jnp.all(x[:2] == y[:2]),
+                in_axes=(0, None)
+            )
+
+            collisions = jax.vmap(
+                matcher,
+                in_axes=(None, 0)
+            )(new_agent_locs, new_agent_locs)
+
+            return collisions
+        
+        def fix_collisions(
+            key: jnp.ndarray,
+            collided_moved: jnp.ndarray,
+            collision_matrix: jnp.ndarray,
+            agent_locs: jnp.ndarray,
+            new_agent_locs: jnp.ndarray
+        ) -> jnp.ndarray:
+            """
+            Function defining multi-collision logic.
+            If agents move into tile, and there is already and agent in that tile,
+            then agent who was there has right of way, and the other agents get reset to where they were.
+            Case 2: if all agents moved to a specfic tile, then one will win at random, and the others who lose out
+            on the tile will be reset to their previous tile.
+
+            Args:
+                - key: jax key for randomisation
+                - collided_moved: jnp.ndarray, the agents which moved in the
+                last time step and caused collisions.
+                - collision_matrix: jnp.ndarray, the agents currently in
+                collisions
+                - agent_locs: jnp.ndarray, the agent locations at the previous
+                time step.
+                - new_agent_locs: jnp.ndarray, the agent locations at the
+                current time step.
+
+            Returns:
+                - jnp.ndarray of the final positions after collisions are
+                managed.
+            """
+            def scan_fn(
+                    state,
+                    idx
+            ):
+                key, collided_moved, collision_matrix, agent_locs, new_agent_locs = state
+
+                return jax.lax.cond(
+                    collided_moved[idx] > 0,
+                    lambda: _fix_collisions(
+                        key,
+                        collided_moved,
+                        collision_matrix,
+                        agent_locs,
+                        new_agent_locs
+                    ),
+                    lambda: (state, new_agent_locs)
+                )
+
+            _, ys = jax.lax.scan(
+                scan_fn,
+                (key, collided_moved, collision_matrix, agent_locs, new_agent_locs),
+                jnp.arange(self.num_agents)
+            )
+
+            final_locs = ys[-1]
+
+            return final_locs
+
+        def _fix_collisions(
+            key: jnp.ndarray,
+            collided_moved: jnp.ndarray,
+            collision_matrix: jnp.ndarray,
+            agent_locs: jnp.ndarray,
+            new_agent_locs: jnp.ndarray
+        ):
+            def select_random_true_index(key, array):
+                # Calculate the cumulative sum of True values
+                cumsum_array = jnp.cumsum(array)
+
+                # Count the number of True values
+                true_count = cumsum_array[-1]
+
+                # Generate a random index in the range of the number of True
+                # values
+                rand_index = jax.random.randint(
+                    key,
+                    (),
+                    0,
+                    true_count
+                )
+
+                # Find the position of the random index within the cumulative
+                # sum
+                chosen_index = jnp.argmax(cumsum_array > rand_index)
+
+                return chosen_index
+            # Pick one from all who collided & moved
+            colliders_idx = jnp.argmax(collided_moved)
+
+            collisions = collision_matrix[colliders_idx]
+
+            # Check whether any of collision participants didn't move
+            collision_subjects = jnp.where(
+                collisions,
+                collided_moved,
+                collisions
+            )
+            collision_mask = collisions == collision_subjects
+            stayed = jnp.all(collision_mask)
+            stayed_mask = jnp.logical_and(~stayed, ~collision_mask)
+            stayed_idx = jnp.where(
+                jnp.max(stayed_mask) > 0,
+                jnp.argmax(stayed_mask),
+                0
+            )
+
+            # Prepare random agent selection
+            k1, k2 = jax.random.split(key, 2)
+            rand_idx = select_random_true_index(k1, collisions)
+            collisions_rand = collisions.at[rand_idx].set(False)
+            new_locs_rand = jax.vmap(
+                lambda p, l, n: jnp.where(p, l, n)
+            )(
+                collisions_rand,
+                agent_locs,
+                new_agent_locs
+            )
+
+            collisions_stayed = jax.lax.select(
+                jnp.max(stayed_mask) > 0,
+                collisions.at[stayed_idx].set(False),
+                collisions_rand
+            )
+            new_locs_stayed = jax.vmap(
+                lambda p, l, n: jnp.where(p, l, n)
+            )(
+                collisions_stayed,
+                agent_locs,
+                new_agent_locs
+            )
+
+            # Choose between the two scenarios - revert positions if
+            # non-mover exists, otherwise choose random agent if all moved
+            new_agent_locs = jnp.where(
+                stayed,
+                new_locs_rand,
+                new_locs_stayed
+            )
+
+            # Update move bools to reflect the post-collision positions
+            collided_moved = jnp.clip(collided_moved - collisions, 0, 1)
+            collision_matrix = collision_matrix.at[colliders_idx].set(
+                [False] * collisions.shape[0]
+            )
+            return ((k2, collided_moved, collision_matrix, agent_locs, new_agent_locs), new_agent_locs)
