@@ -2113,4 +2113,4 @@ class ISP(MultiAgentEnv):
             grids = jax.vmap(add_scalar_channels, in_axes=(0,0)) (
                 grid.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
             )
-            return grids # shape is: (num_agents, OBS_SIZE, OBS_SIZR, num_classes + 2...for river channel and energy channel included)
+            return grids # shape is: (num_agents, OBS_SIZE, OBS_SIZE, num_classes + 2...for river channel and energy channel included)
