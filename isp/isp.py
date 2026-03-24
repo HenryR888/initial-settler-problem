@@ -2122,14 +2122,14 @@ class ISP(MultiAgentEnv):
         ):
             """Step the ISP environment:"""
 
-            # split the keys upfront so the different noise sources are independent...river noise needs to be independent from observation noise, so agents do not infer true river state from noise
+            # split the keys upfront so the different noise sources are independent...river noise needs to be independent from observation noise, so agents do not infer true river state from noise structure
             # Moreover, we do not want collision key to be correlated with river noise or obs noise, otherwise agents could use collision dynamics to infer state of river/observation of other agents
             key, k_river_noise, k_obs_noise, k_collision = jax.random.split(key, 4)
 
             actions = jnp.array(actions)
 
             grid = state.grid.at[
-                # clear agents from the grid first 
+                # clear agents from the grid first:
                 state.agent_locs[:, 0],
                 state.agent_locs[:, 1]
             ].set(jnp.int(Items.empty))
@@ -2141,3 +2141,19 @@ class ISP(MultiAgentEnv):
                     [self.GRID_SIZE_ROW + 1, self.GRID_SIZE_COL+1, 4], dtype=jnp.int16
                 )
             )(state.agent_locs, actions).squeeze()
+
+            agent_move = ( # boolean mask to update agents' locations in the next step, given that they chose a movement action
+                (actions == Actions.up) | (actions == Actions.down) | 
+                (actions == Actions.left) | (actions == Actions.right)
+            )
+            all_new_locs = jax.vmap( # move all the agents accordingly to their new respective locations
+                lambda m, n, a: jnp.where(m,n+self.STEP_MOVE[a], n)
+            )(agent_move, all_new_locs, actions)
+
+            all_new_locs = jax.vmap( # make sure that the agent's move does not cause it to move off the grid...thus, clip its bounds to prevent further handling
+                jnp.clip, in_axes = (0, None, None)
+            )(
+                all_new_locs,
+                jnp.array([0,0,0], dtype=jnp.int16),
+                jnp.array([self.GRID_SIZE_ROW-1, self.GRID_SIZE_ROW-1, 3], dtype=jnp.int16)
+            ).squeeze()
