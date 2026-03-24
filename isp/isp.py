@@ -2114,3 +2114,30 @@ class ISP(MultiAgentEnv):
                 grid.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
             )
             return grids # shape is: (num_agents, OBS_SIZE, OBS_SIZE, num_classes + 2...for river channel and energy channel included)
+        
+        def _step(
+            key: chex.PRNGKey,
+            state: State,
+            actions: jnp.ndarray
+        ):
+            """Step the ISP environment:"""
+
+            # split the keys upfront so the different noise sources are independent...river noise needs to be independent from observation noise, so agents do not infer true river state from noise
+            # Moreover, we do not want collision key to be correlated with river noise or obs noise, otherwise agents could use collision dynamics to infer state of river/observation of other agents
+            key, k_river_noise, k_obs_noise, k_collision = jax.random.split(key, 4)
+
+            actions = jnp.array(actions)
+
+            grid = state.grid.at[
+                # clear agents from the grid first 
+                state.agent_locs[:, 0],
+                state.agent_locs[:, 1]
+            ].set(jnp.int(Items.empty))
+            grid = grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river)) # explictly add back the river tiles
+            state = state.replace(grid=grid) 
+
+            all_new_locs = jax.vmap(
+                lambda p, a: jnp.int16(p+self.ROTATIONS[a]) % jnp.array( # rotate all agents at once 
+                    [self.GRID_SIZE_ROW + 1, self.GRID_SIZE_COL+1, 4], dtype=jnp.int16
+                )
+            )(state.agent_locs, actions).squeeze()
