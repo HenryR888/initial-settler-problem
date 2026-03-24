@@ -35,7 +35,7 @@ class State:
     cumulative_harvest: jnp.ndarray # (n,)...1d tensor (vector), representing cumulative harvest, which will be used in Greed Metric Q_{t,j} 
     cumulative_invest: jnp.ndarray # (n,)...1d tensor (vector), representing cumulative invest, which will also be used in Greed Metric Q_{t,j}
     num_steps_below_collapse: jnp.ndarray # number of consecutive steps for which R_t < K (collapse threshold)
-    river_obs = jnp.ndarray # (n,)...1d tenstor vector, representing the per-agent noisy river estimate 
+    river_obs: jnp.ndarray # (n,)...1d tenstor vector, representing the per-agent noisy river estimate 
     grid: jnp.ndarray # (H,W)...that is the (height, width) of the spatial grid in which the agents operate
     inner_t: int # current timestep within episode
     outer_t: int # current episode index number
