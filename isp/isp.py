@@ -2136,6 +2136,8 @@ class ISP(MultiAgentEnv):
             grid = grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river)) # explictly add back the river tiles
             state = state.replace(grid=grid) 
 
+            # Movement Logic for Step Function: 
+
             all_new_locs = jax.vmap(
                 lambda p, a: jnp.int16(p+self.ROTATIONS[a]) % jnp.array( # rotate all agents at once 
                     [self.GRID_SIZE_ROW + 1, self.GRID_SIZE_COL+1, 4], dtype=jnp.int16
@@ -2157,3 +2159,24 @@ class ISP(MultiAgentEnv):
                 jnp.array([0,0,0], dtype=jnp.int16),
                 jnp.array([self.GRID_SIZE_ROW-1, self.GRID_SIZE_ROW-1, 3], dtype=jnp.int16)
             ).squeeze()
+
+            # Collision Logic for Step Function: 
+
+            agents_moved = jax.vmap( # for all agents compare proposed new location with old location and check if agent proposed to move. If they do change position, return true 
+                lambda n, p: jnp.any(n[:2] != p[:2])
+            )(all_new_locs, state.agent_locs)
+
+            collision_matrix = check_collision(all_new_locs) # setup matrix for collision logic...matrix of Bool values - if agent i and j are proposing to occupy same tile then set to true
+            collisions = jnp.minimum(
+                jnp.sum(collision_matrix, axis=-1, dtype=jnp.int8) -1, 1 # count number of agents who share the same tile, and subtract one for the self collision. Then clamp the value to 1, since we only care if there was a collision or not
+            )
+            collided_moved = jnp.maximum(collisions -~agents_moved, 0) # return 1 if the agent moved and caused a collision
+
+            new_locs = jax.lax.cond(
+                jnp.max(collided_moved) > 0,
+                lambda: fix_collisions( # if there is a collision, then fix the collision according to then ffix_collisions logic
+                    k_collision, collided_moved, collision_matrix,
+                    state.agent_locs, all_new_locs
+                ),
+                lambda: all_new_locs
+            )
