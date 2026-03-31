@@ -2295,6 +2295,43 @@ class ISP(MultiAgentEnv):
             }
 
             return obs, state, rewards, done, info
+        
+        # reset function which also initialises the state of the episode:
+        def _reset_state(
+                key: jnp.ndarray
+        ) -> State:
+            key, k_agents, k_dirs, k_obs = jax.random.split(key, 4) # splitting up the sources of randomness to avoid correlation...one source of randomness for agent spawn position; another for direction and observation
+
+            agent_pos = jax.random.permutation(k_agents, self.SPAWNS_PLAYERS)[:num_agents] # we randomly asign the agent' starting positions
+            agent_dirs = jax.random.randint( # randomly assign direction that agent faces ( up, down, left, right...that is why maxval = 4)
+                k_dirs, shape=(num_agents,), minval=0, maxval=4, dtype=jnp.int16
+            )
+            agent_locs = jnp.stack( # combine agent position with agent direction 
+                [agent_pos[:, 0], agent_pos[:, 1], agent_dirs], axis=-1
+            )
+
+            # initialise the grid according to the ASCII Map, and with random positions and directions (agent_locs) of agent:
+            grid = jnp.zeros((self.GRID_SIZE_ROW, self.GRID_SIZE_COL), dtype=jnp.int16)
+            grid = grid.at[self.SPAWNS_WALL[:,0], self.SPAWNS_WALL[:,1]].set(jnp.int16(Items.wall))
+            grid = grid.at[self.RIVER[:,0], self.RIVER[:, 1]].set(jnp.int16(Items.river))
+            grid = grid.at[agent_locs[:,0], agent_locs[:, 1]].set(self._agents)
+
+            # we obtain some initial observation for the agents: 
+            obs_noise = jax.random.normal(k_obs, shape=(num_agents,))* self.sigma_noise
+            river_obs_init = jnp.clip(1.0+obs_noise, 0.0, 1.0)
+
+            return State(
+                agent_locs=agent_locs,
+                river_level=jnp.float32(1.0),
+                energy=jnp.full((num_agents,), 0.5, dtype=jnp.float32), # note that we initialise agents' energy level at 0.5...not starving, not full of energy either. 
+                reputations=jnp.zeros((num_agents,), dtype=jnp.float32),
+                cumulative_invest=jnp.zeros((num_agents,),dtype=jnp.float32),
+                num_steps_below_collapse=jnp.int32(0),
+                river_obs=river_obs_init,
+                grid=grid,
+                inner_t=jnp.int32(0),
+                outer_t=jnp.int32(0),
+            )
 
 
 
