@@ -2174,9 +2174,23 @@ class ISP(MultiAgentEnv):
 
             new_locs = jax.lax.cond(
                 jnp.max(collided_moved) > 0,
-                lambda: fix_collisions( # if there is a collision, then fix the collision according to then ffix_collisions logic
+                lambda: fix_collisions( # if there is a collision, then fix the collision according to the fix_collisions logic
                     k_collision, collided_moved, collision_matrix,
                     state.agent_locs, all_new_locs
                 ),
                 lambda: all_new_locs
             )
+
+            def is_on_river(loc):
+                return jnp.any(jnp.all(self.RIVER == loc[:2], axis=-1)) # check to see whether an agent is standing on a river tile...recall agent cannot harvest or invest unless on the river
+            on_river = jax.vmap(is_on_river)(new_locs)
+
+
+            # classify agent actions to update energy levels, cumulative harvest and cumulative invest, c_pun, c_rec, w_p to reward
+            harvesting = (actions == Actions.harvest) & on_river
+            investing = (actions == Actions.invest) & on_river
+            noop = (actions == Actions.stay)
+            punishing = actions >= 9 # Recall Punish(j) = 9 + j
+            punish_target = jnp.clip(actions-9, 0, num_agents-1) 
+
+            
