@@ -2234,7 +2234,7 @@ class ISP(MultiAgentEnv):
 
             # update the cumulative harvest and invest amount to be used in the greed metric: 
             new_cumulative_harvest = state.cumulative_harvest + harvesting.astype(jnp.float32)
-            new_cumaltive_invest = state.cumulative_invest + investing.astype(jnp.float32)
+            new_cumulative_invest = state.cumulative_invest + investing.astype(jnp.float32)
 
             # Reward function Update: Recall reward is: u_{t,i} = w_f*delta_e - w_h.I[e<=lambda_h] - w_c*I[r<=k] - w_p*[punish]
             delta_e = energy_new - energy_old
@@ -2243,7 +2243,60 @@ class ISP(MultiAgentEnv):
             punish_penalty = jnp.where(punishing, self.w_p, 0.0)
             rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
 
-            
+            # update the grid with river tiles and place agents on their new respective tiles: 
+            new_grid = state.grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river))
+            new_grid = new_grid.at[new_locs[:, 0], new_locs[:, 1]].set(self._agents)
+
+            state_nxt = State( # build out the next state at time t+1
+                agent_locs=new_locs,
+                river_level=R_new,
+                energy=energy_new,
+                reputations=state.reputations, # we haven't changed this yet...once adding audit logic then we will change reputations vector
+                cumulative_harvest=new_cumulative_harvest,
+                cumulative_invest=new_cumulative_invest,
+                num_steps_below_collapse=num_steps_below,
+                river_obs=river_obs_new,
+                grid=new_grid,
+                inner_t = state.inner_t+1,
+                outer_t=state.outer_t,
+            )
+
+            # episode reset logic:
+            inner_t = state_nxt.inner_t
+            outer_t = state_nxt.outer_t
+            collapse_done = num_steps_below>=self.k_collapse_steps # reset if the number of steps that river is below collapse threshold reaches number of collapse steps
+            reset_inner = (inner_t == num_inner_steps) | collapse_done # also reset if reached total number of time steps specified within the episode
+
+            state_re = _reset_state(key)
+            state_re = state_re.replace(outer_t=outer_t+1)
+
+            state = jax.tree_map( # if the episode is terminated, then reset, otherwise, go to the next state
+                lambda x, y: jnp.where(reset_inner, x, y),
+                state_re,
+                state_nxt
+            )
+
+            # check to see that training is done, if so then give done flag
+            outer_t = state.outer_t 
+            reset_outer = outer_t == num_outer_steps
+            done = {f'{a}': reset_outer for a in self.agents}
+            done["__all__"] = reset_outer
+
+            obs = _get_obs(state)
+            rewards = jnp.where(reset_inner, jnp.zeros_like(rewards), rewards) # reset rewards after episode complete
+
+            info = { # return some diagnostics which we can go through for our own reference...this is not for the agentss' training
+                "harvest": harvesting.astype(jnp.float32),
+                "invest": investing.astype(jnp.float32),
+                "punish": punishing.astype(jnp.float32),
+                "river_level": R_new,
+                "energy": energy_new,
+                "collapse": collapse_done,
+            }
+
+            return obs, state, rewards, done, info
+
+
 
 
             
