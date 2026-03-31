@@ -2235,6 +2235,17 @@ class ISP(MultiAgentEnv):
             # update the cumulative harvest and invest amount to be used in the greed metric: 
             new_cumulative_harvest = state.cumulative_harvest + harvesting.astype(jnp.float32)
             new_cumaltive_invest = state.cumulative_invest + investing.astype(jnp.float32)
+
+            # Reward function Update: Recall reward is: u_{t,i} = w_f*delta_e - w_h.I[e<=lambda_h] - w_c*I[r<=k] - w_p*[punish]
+            delta_e = energy_new - energy_old
+            hunger_penalty = jnp.where(energy_new <= self.lambda_h, self.w_h, 0.0)
+            collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
+            punish_penalty = jnp.where(punishing, self.w_p, 0.0)
+            rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
+
+            
+
+
             
 
 
