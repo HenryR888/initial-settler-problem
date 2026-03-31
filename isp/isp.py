@@ -2325,6 +2325,7 @@ class ISP(MultiAgentEnv):
                 river_level=jnp.float32(1.0),
                 energy=jnp.full((num_agents,), 0.5, dtype=jnp.float32), # note that we initialise agents' energy level at 0.5...not starving, not full of energy either. 
                 reputations=jnp.zeros((num_agents,), dtype=jnp.float32),
+                cumulative_harvest=jnp.zeros((num_agents,), dtype=jnp.float32),
                 cumulative_invest=jnp.zeros((num_agents,),dtype=jnp.float32),
                 num_steps_below_collapse=jnp.int32(0),
                 river_obs=river_obs_init,
