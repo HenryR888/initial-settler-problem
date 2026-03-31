@@ -1769,7 +1769,7 @@ class ISP(MultiAgentEnv):
             w_h = 5.0, # weight for Indicator function for agent being below survival threshold...if agent is below threshold - huge penalty
             w_c = 1.0, # weight for indicator function for river health being below K collapse shreshold
             w_p=0.1, # weight for indicator function for agent being punished
-            lambda_h = 0.1, # hunger threshold for energy level
+            lambda_h = 0.1, # hunger threshold for energy level...if energy level drops below this, agent is penalised heavily with w_h
             #lambda_c=0.2, # river collapse hyperparam...we shall start with K as this value, but might provide interesting dynamics to have different K values with lambdda_c to start penalising agents earlier rather than later
             c_pun=0.08, # energy cost for agent to punish someone else
             c_rec=0.16, # energy cost for agent who is receiving punishment
@@ -2209,4 +2209,32 @@ class ISP(MultiAgentEnv):
                 )
             energy_delta = energy_delta - jax.vmap(punishment_received)(jnp.arange(num_agents)) # update energy levels of each agent by taking delta_energy_self and subtracting energy loss from receiving punishment per agent
             
+            energy_new = jnp.clip(energy_old + energy_delta, 0.0, 1.0) 
+
+            # River Dynamics Update: recall R_{t+1} = clip(R_t + alpha.R_t(1-R_t) - D_t = I_t + eps_t, 0, 1)
+            D_t = jnp.sum(jnp.where(harvesting, self.gamma_h, 0.0)) # damage to be subtracted from river health from agents harvesting
+            I_t = jnp.sum(jnp.where(investing, self.gamma_v, 0.0)) # health boost to be added back to river from agents investing 
+            eps_t = jax.random.normal(k_river_noise)* self.sigma_noise # eps_t ~ N(0, sigma^2)
+
+            R_t = state.river_level
+            R_new = jnp.clip( # update river level according to logistic regeneration process abot
+                R_t + self.alpha*R_t*(1.0-R_t) - D_t + I_t + eps_t, 
+                0.0, 1.0
+            )
+
+            below_K = R_new < self.K_collapse_thresh # bool to check if river health level is below collapse threshold
+            num_steps_below = jnp.where( # if the river health is below the threshold, then increment the count by one... remember that if the count goes above our threshold then environment reaches a terminal state
+                below_K,
+                state.num_steps_below_collapse + 1,
+                jnp.int32(0)
+            )
+
+            obs_noise = jax.random.normal(k_obs_noise, shape=(num_agents,))* self.sigma_noise
+            river_obs_new = jnp.clip(R_new + obs_noise, 0.0, 1.0) # agents make local noisy observations about the environment each step 
+
+            # update the cumulative harvest and invest amount to be used in the greed metric: 
+            new_cumulative_harvest = state.cumulative_harvest + harvesting.astype(jnp.float32)
+            new_cumaltive_invest = state.cumulative_invest + investing.astype(jnp.float32)
             
+
+
