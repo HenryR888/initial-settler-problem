@@ -2191,6 +2191,22 @@ class ISP(MultiAgentEnv):
             investing = (actions == Actions.invest) & on_river
             noop = (actions == Actions.stay)
             punishing = actions >= 9 # Recall Punish(j) = 9 + j
-            punish_target = jnp.clip(actions-9, 0, num_agents-1) 
+            punish_target = jnp.clip(actions-9, 0, num_agents-1)
 
+            # Update per agent energy levels: 
+            energy_old = state.energy # vector with per agent energy levels
+
+            energy_delta = ( # this is delta_energy for self actions
+                jnp.where(harvesting, self.beta_h, 0.0)
+                + jnp.where(investing, -self.beta_v, 0.0)
+                + jnp.where(noop, self.g, 0.0)
+                + jnp.where(punishing, -self.c_pun, 0.0)
+            ) 
+
+            def punishment_received(j): # also need to account for agents how received total punishment from other agents within env
+                return jnp.sum(
+                    jnp.where(punishing & (punish_target == j), self.c_rec, 0.0)
+                )
+            energy_delta = energy_delta - jax.vmap(punishment_received)(jnp.arange(num_agents)) # update energy levels of each agent by taking delta_energy_self and subtracting energy loss from receiving punishment per agent
+            
             
