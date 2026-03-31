@@ -2132,7 +2132,7 @@ class ISP(MultiAgentEnv):
                 # clear agents from the grid first:
                 state.agent_locs[:, 0],
                 state.agent_locs[:, 1]
-            ].set(jnp.int(Items.empty))
+            ].set(jnp.int16(Items.empty))
             grid = grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river)) # explictly add back the river tiles
             state = state.replace(grid=grid) 
 
@@ -2157,7 +2157,7 @@ class ISP(MultiAgentEnv):
             )(
                 all_new_locs,
                 jnp.array([0,0,0], dtype=jnp.int16),
-                jnp.array([self.GRID_SIZE_ROW-1, self.GRID_SIZE_ROW-1, 3], dtype=jnp.int16)
+                jnp.array([self.GRID_SIZE_ROW-1, self.GRID_SIZE_COL-1, 3], dtype=jnp.int16)
             ).squeeze()
 
             # Collision Logic for Step Function: 
