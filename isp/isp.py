@@ -2307,7 +2307,7 @@ class ISP(MultiAgentEnv):
                 k_dirs, shape=(num_agents,), minval=0, maxval=4, dtype=jnp.int16
             )
             agent_locs = jnp.stack( # combine agent position with agent direction 
-                [agent_pos[:, 0], agent_pos[:, 1], agent_dirs], axis=-1
+                [agent_pos[:, 0].astype(jnp.int16), agent_pos[:, 1].astype(jnp.int16), agent_dirs], axis=-1
             )
 
             # initialise the grid according to the ASCII Map, and with random positions and directions (agent_locs) of agent:
