@@ -2285,7 +2285,7 @@ class ISP(MultiAgentEnv):
             obs = _get_obs(state)
             rewards = jnp.where(reset_inner, jnp.zeros_like(rewards), rewards) # reset rewards after episode complete
 
-            info = { # return some diagnostics which we can go through for our own reference...this is not for the agentss' training
+            info = { # return some diagnostics which we can go through for our own reference...this is not for the agents' training
                 "harvest": harvesting.astype(jnp.float32),
                 "invest": investing.astype(jnp.float32),
                 "punish": punishing.astype(jnp.float32),
