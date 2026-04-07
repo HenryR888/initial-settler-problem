@@ -2111,7 +2111,7 @@ class ISP(MultiAgentEnv):
                 return jnp.concatenate([grid, river_ch, energy_ch], axis=-1)
             
             grids = jax.vmap(add_scalar_channels, in_axes=(0,0)) (
-                grid.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
+                grids.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
             )
             return grids # shape is: (num_agents, OBS_SIZE, OBS_SIZE, num_classes + 2...for river channel and energy channel included)
         
@@ -2333,9 +2333,88 @@ class ISP(MultiAgentEnv):
                 inner_t=jnp.int32(0),
                 outer_t=jnp.int32(0),
             )
+        
+        # Now we return both the observation and state for the initial state: 
+        def reset(key: jnp.ndarray):
+            state = _reset_state(key)
+            obs = _get_obs(state)
+            return obs, state
+        
+        if jit: # compiles much faster using JIT
+            self.step_env = jax.jit(_step)
+            self.reset = jax.jit(reset)
+        else:
+            self.step_env = _step
+            self.reset = reset
 
+    @property
+    def name(self) -> str:
+        return "ISP"
+    
+    @property
+    def num_actions(self) -> int: 
+        return 9 + self.num_agents
+    
+    def action_space(self, agent_id=None) -> Discrete:
+        """Action space is 9 base actions + 1 PUNISH(j) per agent (turn left/right, move in 4 directions an stay, harvest and invest)"""
+        return Discrete(9 + self.num_agents)
+    
+    def observation_space(self):
+        """
+        Observation shape per agent: 
+        - one-hot grid channels: len(Items)-1 + num_agents (= 2 + num_agents: wall, river, each agent)
+        - scalar channels: 2 (river_obs, energy)
+        Total channels = 4 + num_agents 
+        """
+        num_classes = len(Items) - 1 + self.num_agents
+        total_channels = num_classes + 2 # here we add 2 for the river_obs and energy
+        shape = (
+            (self.OBS_SIZE, self.OBS_SIZE, total_channels)
+            if self.cnn
+            else (self.OBS_SIZE**2*total_channels,)
+        )
+        return Box(low=0.0, high=1.0, shape=shape, dtype=jnp.float32), shape
+    
+    def render_tile(
+            self,
+            obj: int,
+            agent_dir=None,
+            highlight: bool=False,
+            tile_size: int=32,
+            subdivs: int=3,
+    ) -> onp.ndarray:
+        key = (obj, agent_dir, highlight, tile_size)
+        if key in self.title_cache: # cache tile so repeated renders do not recompute. 
+            return self.title_cache[key]
+        
+        img = onp.full(
+            shape = (tile_size*subdivs, tile_size*subdivs, 3),
+            fill_value=(190,170,120),
+            dtype=onp.uint8,
+        )
 
+        if obj == Items.wall: 
+            fill_coords(img, point_in_rect(0,1,0,1), (127.0,127.0,127.0)) #grey rectangle for wall
+        elif obj == Items.river: 
+            fill_coords(img, point_in_rect(0,1,0,1), (40.0, 80.0, 214.0)) # blue rectangle for river
+        elif obj in self._agents:
+            agent_color = self.PLAYER_COLOURS[int(obj) - len(Items)]
+            fill_coords(img, point_in_circle(0.5,0.5,0.31), agent_color)
+            if agent_dir is not None:
+                tri_fn = point_in_triangle(
+                    (0.12, 0.19), (0.87, 0.50), (0.12, 0.81) # white direction triangle for the direction that agent is pointing 
+                )
+                tri_fn = rotate_fn(tri_fn, cx=0.5, cy=0.5, theta=0.5*math.pi * agent_dir)
+                fill_coords(img, tri_fn, (255.0, 255.0, 255.0))
 
+        if highlight:
+            highlight_img(img)
+
+        img = downsample(img, subdivs)
+        self.title_cache[key] = img
+        return img
+
+# TODO: last_claims, reputations (once communication logic is addedd), render method 
 
             
 
