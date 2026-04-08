@@ -29,12 +29,18 @@ class LogEnvState:
     episode_returns: float # cumulative return for each agent so far (num_agents,)
     episode_lengths: int # num steps each agent has taken in current episode (num_agent,)
     episode_harvest: float # total amount of harvesting done by each agent during episode (num_agents,)
-    episode_invest: float # total number of investing done by each agent during each agent
+    episode_invest: float # total number of investing done by each agent during each episode
+    episode_punish: float # total number of punishment done by each agent during each episode (num_agents,)
     # snapshot of the just-completed episode (for logging): 
     returned_episode_returns: float
     returned_episode_lengths: int
     returned_episode_harvest: float
     returned_episode_invest: float
+    returned_episode_punish: float
+    returned_river_level: float # scalar value
+    returned_mean_energy: float # scalar value (mean across all agents)
+    returned_collapse_rate: float # scalar value
+
 
 class LogWrapper(JaxMARLWrapper):
     """
@@ -56,10 +62,15 @@ class LogWrapper(JaxMARLWrapper):
             episode_lengths=jnp.zeros((n,), dtype=jnp.int32),
             episode_harvest=jnp.zeros((n,)),
             episode_invest=jnp.zeros((n,)),
+            episode_punish=jnp.zeros((n,)),
             returned_episode_returns=jnp.zeros((n,)),
             returned_episode_lengths=jnp.zeros((n,), dtype=jnp.int32),
             returned_episode_harvest=jnp.zeros((n,)),
             returned_episode_invest=jnp.zeros((n,)),
+            returned_episode_punish=jnp.zeros((n,)),
+            returned_river_level=jnp.zeros(()),
+            returned_mean_energy=jnp.zeros(()),
+            returned_collapse_rate=jnp.zeros(()),
         )
         return obs, state
     
@@ -80,6 +91,7 @@ class LogWrapper(JaxMARLWrapper):
         new_episode_length = state.episode_lengths + 1
         new_episode_harvest = state.episode_harvest + info["harvest"]
         new_episode_invest = state.episode_invest + info["invest"]
+        new_episode_punish = state.episode_punish + info["punish"]
 
         state = LogEnvState(
             env_state = env_state,
@@ -88,11 +100,16 @@ class LogWrapper(JaxMARLWrapper):
             episode_lengths=new_episode_length*(1-ep_done),
             episode_harvest=new_episode_harvest*(1-ep_done),
             episode_invest=new_episode_invest*(1-ep_done),
+            episode_punish=new_episode_punish*(1-ep_done),
             # once episode is completed, we snapshot the completed episode's values: 
             returned_episode_returns=state.returned_episode_returns*(1-ep_done)+new_episode_return*ep_done,
             returned_episode_lengths=state.returned_episode_lengths*(1-ep_done) + new_episode_length*ep_done,
             returned_episode_harvest=state.returned_episode_harvest*(1-ep_done)+ new_episode_harvest*ep_done,
             returned_episode_invest=state.returned_episode_invest*(1-ep_done) + new_episode_invest*ep_done,
+            returned_episode_punish=state.returned_episode_punish * (1 - ep_done) + new_episode_punish * ep_done,
+            returned_river_level=state.returned_river_level * (1-ep_done) + info["river_level"] * ep_done,
+            returned_mean_energy=state.returned_mean_energy * (1-ep_done) + info["energy"].mean() * ep_done,
+            returned_collapse_rate=state.returned_collapse_rate * (1-ep_done) + info["collapse"].astype(jnp.float32) * ep_done,
         )
 
         if self.replace_info:
@@ -102,6 +119,10 @@ class LogWrapper(JaxMARLWrapper):
         info["episode_lengths"] = state.returned_episode_lengths
         info["episode_harvest"] = state.returned_episode_harvest
         info["episode_invest"] = state.returned_episode_invest
+        info["episode_punish"] = state.returned_episode_punish
+        info["returned_river_level"] = state.returned_river_level
+        info["returned_mean_energy"] = state.returned_mean_energy
+        info["returned_collapse_rate"] = state.returned_collapse_rate
         info["returned_episode"] = jnp.full((self._env.num_agents,), ep_done)
 
         return obs, state, reward, done, info
