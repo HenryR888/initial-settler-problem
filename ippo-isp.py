@@ -282,7 +282,7 @@ def make_train(config):
         network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
 
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros((1, *(env.observation_space()[0]).shape)) # here we create a dummy tensor in order to initialise our network in the next step.
+        init_x = jnp.zeros((1, *env.observation_space().shape)) # here we create a dummy tensor in order to initialise our network in the next step.
 
         network_params = network.init(_rng, init_x) # initialising neural network with dummy tensor (batch, width, height, channels)...these are the tensors that we shall pass into our Neural Net which come from our CNN
 
@@ -325,7 +325,7 @@ def make_train(config):
                 rng, _rng = jax.random.split(rng)
                 
                 # SOME Qs: When exactly are we obtaining this observation? 
-                obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *(env.observation_space()[0]).shape) # flattens environments and agent axes together, to obtain one batch of all actor observations to feed into the network
+                obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *env.observation_space().shape) # flattens environments and agent axes together, to obtain one batch of all actor observations to feed into the network
                 
                 # ! IMPORTANT: Here is where we apply the network...we give the network the current params of our CNN, and the observation batch of all agents from all environments that we flattened above, and feed forward through the CNN, then this returns the policy distribution (output) from our actor head
                 # and then the value estimate for each actor observation (from the critic head)
@@ -347,7 +347,10 @@ def make_train(config):
                     env.step, in_axes=(0, 0, 0)
                 )(rng_step, env_state, env_act)
                 
-                info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
+                info = jax.tree_map(
+                    lambda x: x.reshape((config["NUM_ACTORS"],)) if x.size == (config["NUM_ENVS"],) else x,
+                    info
+                )
                 transition = Transition( # as in the transition class defined earlier, this stores the transition object for this particular time step, which is what PPO needs later (log prob and value specifically)
                     batchify_int_dict(done, env.agents, config["NUM_ACTORS"]).squeeze(),
                     action,
@@ -368,7 +371,7 @@ def make_train(config):
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, update_step, rng = runner_state
 
-            last_obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *(env.observation_space()[0]).shape)
+            last_obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *env.observation_space().shape)
             _, last_val = network.apply(train_state.params, last_obs_batch) # we need the final value of the next state to compute our advantage using GAE
 
             def _calculate_gae(traj_batch, last_val):
@@ -504,9 +507,15 @@ def make_train(config):
 
             update_step = update_step + 1
 
-            # Per-agent harvest and invest breakdown: 
-            episode_harvest = metric["episode_harvest"] # shape is (NUM_STEPS, NUM_ENVS, num_agents)
-            episode_invest = metric["episode_invest"]
+            num_agents = config["ENV_KWARGS"]["num_agents"]
+
+            # Harvest and Invest Metrics: 
+            episode_harvest = metric["episode_harvest"].reshape(
+                config["NUM_STEPS"], config["NUM_ENVS"], num_agents
+            ) 
+            episode_invest = metric["episode_invest"].reshape(
+                config["NUM_STEPS"], config["NUM_ENVS"], num_agents
+            )
 
             for agent_id in range(config["ENV_KWARGS"]["num_agents"]):
                 metric[f"agent_{agent_id}_harvest"] = episode_harvest[..., agent_id].mean() # over all time steps, and environment, give me the per-agent average of the harvest...i.e. avg agent harvest per step per environment
@@ -517,6 +526,20 @@ def make_train(config):
 
             agent_harvest_means = jnp.array([episode_harvest[..., i].mean() for i in range(config["ENV_KWARGS"]["num_agents"])])
             metric["harvest_gini"] = gini_coefficient(agent_harvest_means) # check gini coeff to determine how equal is distribution of harvesting among agents
+
+            # Punishment Metrics: 
+            episode_punish = metric["episode_punish"].reshape(
+                config["NUM_STEPS"], config["NUM_ENVS"], num_agents
+            )
+            for agent_id in range(num_agents):
+                metric[f"agent_{agent_id}_punish"] = episode_punish[..., agent_id].mean() # avg agent punish per step per env
+            metric["total_punish_events"] = episode_punish.sum(axis=-1).mean() # avg punish per step
+            del metric["episode_punish"]
+
+            # River Level, Energy and Collapse Metrics (scalars per step): 
+            metric["mean_river_level"] = metric.pop("returned_river_level").mean()
+            metric["mean_energy"] = metric.pop("returned_mean_energy").mean()
+            metric["collapse_rate"] = metric.pop("returned_collapse_rate").mean()
 
             metric = jax.tree_map(lambda x: x.mean(), metric) # then we have one clean dictionary of metrics to gather info about rollout data
 
