@@ -24,11 +24,12 @@ CONFIG = {
     "SEED": 42,
     "NUM_SEEDS": 1,
     "LR": 0.0003,
+    "GRU_HIDDEN_DIM: 128" # dimension for h_t for GRU
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
     "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing policy update
     "TOTAL_TIMESTEPS": 1e8, # total number of time steps before training ends
     "UPDATE_EPOCHS": 2, # number of times we iterate over the rollot data before collecting new data 
-    "NUM_MINIBATCHES": 500, # splitting the data into NUM_MINIBATCHES 
+    "NUM_MINIBATCHES": 8, # here within the CNN GRU, we have 8 minibatches of 24 sequences each...with the reason being that we need it to divide NUM_ACTORS = NUM_ENVS * num_agents = 64*3=192, since PPO needs to split data according to sequence
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95, # used within the Generalised Advantage Estimator for A_t
     "CLIP_EPS": 0.2, # epsilon in the clip objective function...interpretation is that policy is not allowed to change by more than 20% per update step...remember that if we have one bad gradient step then the policy collapses.
@@ -47,7 +48,7 @@ CONFIG = {
     "ENTITY": "",
     "PROJECT": "isp",
     "WANDB_MODE" : "online", # NOTE: for dev, set to offline
-    "WANDB_TAGS": ["3-agents", "ippo-cnn"],
+    "WANDB_TAGS": ["3-agents", "ippo-gru"],
 }
 
 class CNN(nn.Module):
@@ -103,47 +104,61 @@ class CNN(nn.Module):
         return x
 
 
-class ActorCritic(nn.Module):
-    action_dim: Sequence[int]
+class ActorCriticGRU(nn.Module):
+    action_dim: int
+    hidden_dim: int = 128
     activation: str = "relu"
     dtype: Any = jnp.bfloat16
 
     @nn.compact
-    def __call__(self, x): # define the forward pass 
+    def __call__(self, hstate, obs, done):
+        # Feedforward part of RNN: take in: 
+        # hstate: (batch, hidden_dim)...agent's memory of the past
+        # obs: (batch, H, W, C)...obs batch: Height, Width and channels from CNN
+        # done (batch,) bool - True if previous step ended episode
         if self.activation == "relu":
             activation = nn.relu
         else:
-            activation = nn.tanh
-        # this is the embedding from the output of our convolutional neural network, which will be receive by actor (policy) critic (value) head
-        embedding = CNN(self.activation, dtype=self.dtype)(x)
-        # because we have discrete actions here, the actor will output logits...the name mean, comes from a Gaussian policy which outputs continuous action spaces
-        actor_mean = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), # we've got 64 neurons in this layer (since we have a 64-dim embedding)...note that each neuron will receive this entire embedding vector
-            dtype=self.dtype, # that kernel_init actually comes from how we initialise the weights. the weights here satisfy W'W =I...this stabilises our training and reduces vanishing/exploding gradients. The reason being that orthogonal matrices allow for preservation of vector length.
-            param_dtype=jnp.float32, #...cont from above, this means that ||W_x|| \approx ||x||
-        )(embedding) # np.sqrt(2) allows for gain of the output...since half the values (h) become zero, the variance of activations...so, the signal drops quickly, thus we want to boost it to maintain some signal
-        actor_mean = activation(actor_mean) # apply non-linearity
-        actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), # the small gain (0.01) is to keep the initial logit near 0 to prevent huge deviations in the policy training, initially
-            dtype=self.dtype,
-            param_dtype=jnp.float32,
-        )(actor_mean)
-        pi = distrax.Categorical(logits=actor_mean.astype(jnp.float32)) # then use distrax to build out distribution from logits
+            activation= nn.tanh
 
-        # value head...
-        critic = nn.Dense( # same logic as actor hidden layer
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), # notice that we initialise the bias at zero, because we want stable initialisation to just be Wx
-            dtype=self.dtype,
-            param_dtype=jnp.float32,
-        )(embedding)
+        embedding = CNN(self.activation, dtype=self.dtype)(obs) # (batch, 64)
+
+        # we reset the hidden state at episode boundaries, to prevent memory leakage:
+        hstate = jnp.where(done[:, jnp.newaxis], jnp.zeros_like(hstate), hstate)
+
+        # here GRU receives previous hidden state, and embedding...i.e. combining what it remembers with what it sees now to produce new memory (h_t = f_theta(h_{t-1}, embedding)): 
+        new_hstate, gru_out = nn.GRUCell(features=self.hidden_dim)(hstate, embedding)
+
+        # then we take the GRU output (the updated memory) and we pass it into the actor nework (which has 64 dimensions)
+        actor_mean = nn.Dense(
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), # we orthogonalise using sqrt(2) since this is a common PPO technique which stabilises training, also initial bias vector is just all zeros
+            dtype=self.dtype, param_dtype=jnp.float32,
+        )(gru_out)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense( # now we map the 64-dim actor feature vectors to logits
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0),
+            dtype=self.dtype, param_dtype=jnp.float32,
+        )(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean.astype(jnp.float32)) # now we take the logits and convert them to an actor categorical-distribution
+
+        # critic head of network: 
+        critic = nn.Dense( # once again take GRU output and map it to 64 dimensional vector
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
+            dtype=self.dtype, param_dtype=jnp.float32
+        )(gru_out)
         critic = activation(critic)
-        critic = nn.Dense( # output scalar value prediction per observation
+        critic = nn.Dense( # take the 64 dimensional vector and map to critic value estimate scalar value (V(s_t,h_{t-1}))
             1, kernel_init=orthogonal(1.0), bias_init=constant(0.0),
-            dtype=self.dtype,
-            param_dtype=jnp.float32,
+            dtype=self.dtype, param_dtype=jnp.float32,
         )(critic)
 
-        return pi, jnp.squeeze(critic.astype(jnp.float32), axis=-1)
+        return new_hstate, pi, jnp.squeeze(critic.astype(jnp.float32), axis=-1) # output is new hidden state, policy over all actions, critic value estimate
+        
+
+
+
+
+
 
 # NamedTuple allows for python to call objects like t.action or t.state, instead of indexing like t[0], t[1]...
 # This transition allows us to store all the information for a specific time step
