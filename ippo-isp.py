@@ -155,11 +155,6 @@ class ActorCriticGRU(nn.Module):
         return new_hstate, pi, jnp.squeeze(critic.astype(jnp.float32), axis=-1) # output is new hidden state, policy over all actions, critic value estimate
         
 
-
-
-
-
-
 # NamedTuple allows for python to call objects like t.action or t.state, instead of indexing like t[0], t[1]...
 # This transition allows us to store all the information for a specific time step
 class Transition(NamedTuple):
@@ -169,6 +164,7 @@ class Transition(NamedTuple):
     reward: jnp.ndarray # r_t
     log_prob: jnp.ndarray # taking log of policy (log_theta(pi(a_t |s_t)))
     obs: jnp.ndarray # observation taken by agent
+    last_done: jnp.ndarray # did the previous time step end an episode? We need to know this so that GRU can reset memory from previous episode.  
     info: jnp.ndarray # some extra info that we can log later on
 
 
@@ -178,7 +174,7 @@ def get_rollout(params, config):
     '''
     env = ISP(**config["ENV_KWARGS"])
 
-    network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
+    network = ActorCriticGRU(env.action_space().n, activation=config["ACTIVATION"])
 
     key = jax.random.PRNGKey(0)
     key, key_r, key_a = jax.random.split(key, 3)
@@ -272,7 +268,7 @@ def make_train(config):
     )
     # splitting up the number of steps throughout all environments in minibatches, and taking the size of those minibatches
     config["MINIBATCH_SIZE"] = (
-        config["NUM_ACTORS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+        config["NUM_ACTORS"] // config["NUM_MINIBATCHES"]
     )
 
     env = LogWrapper(env, replace_info=False) # enable logging for statistics and tracking
@@ -294,12 +290,16 @@ def make_train(config):
         Here we perform the entire training run.
         '''
         # INIT NETWORK
-        network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
+        network = ActorCriticGRU(env.action_space().n, 
+                                 hidden_dim=config["GRU_HIDDEN_DIM"],
+                                 activation=config["ACTIVATION"],
+        )
 
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros((1, *env.observation_space().shape)) # here we create a dummy tensor in order to initialise our network in the next step.
-
-        network_params = network.init(_rng, init_x) # initialising neural network with dummy tensor (batch, width, height, channels)...these are the tensors that we shall pass into our Neural Net which come from our CNN
+        init_hstate = jnp.zeros((1, config["GRU_HIDDEN_DIM"]))
+        init_obs = jnp.zeros((1, *env.observation_space().shape)) # here we create a dummy tensor in order to initialise our network in the next step.
+        init_done= jnp.zeros((1,), dtype=bool)
+        network_params = network.init(_rng, init_hstate, init_obs, init_done) # initialising neural network with dummy tensor (batch, width, height, channels), initial memory statem and initial done state. 
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -332,51 +332,49 @@ def make_train(config):
             2.) compute the advantages
             3.) update the network with PPO
             '''
+
+            # capture the hidden state at the start of the rollout: 
+            _,_,_,_,init_hstate,_,_ = runner_state
+
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
-                train_state, env_state, last_obs, update_step, rng = runner_state
+                train_state, env_state, last_obs, last_done, hstate, update_step, rng = runner_state # unpack everything from current training environment
 
-                # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                
-                # SOME Qs: When exactly are we obtaining this observation? 
-                obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *env.observation_space().shape) # flattens environments and agent axes together, to obtain one batch of all actor observations to feed into the network
-                
-                # ! IMPORTANT: Here is where we apply the network...we give the network the current params of our CNN, and the observation batch of all agents from all environments that we flattened above, and feed forward through the CNN, then this returns the policy distribution (output) from our actor head
-                # and then the value estimate for each actor observation (from the critic head)
-                pi, value = network.apply(train_state.params, obs_batch)
-                action = pi.sample(seed=_rng) # for each observation of each agent, we sample an action from the policy
-                log_prob = pi.log_prob(action) # for the PPO alg, we need the log of that prob from the sampled action
-                env_act = unbatchify(
-                    action, env.agents, config["NUM_ENVS"], env.num_agents # unflattening the action tensor to fit what environment expects 
-                )
+                obs_batch = jnp.transpose(last_obs, (1,0,2,3,4)).reshape(-1, *env.observation_space().shape) # transpose and flatten to obtain batch of actor observations
 
-                env_act = [v for v in env_act.values()] # convert the dictionary values in a list for env.step
-                
-                # STEP ENV
+                new_hstate, pi, value = network.apply(train_state.params, hstate, obs_batch, last_done) # run the actor/critic GRU network 
+                action = pi.sample(seed=_rng) # sample an action from that pi that was outputted, and then compute log_prob
+                log_prob = pi.log_prob(action)
+                env_act = unbatchify(action, env.agents, config["NUM_AGENTS"], env.num_agents)
+                env_act = [v for v in env_act.values()] # per-agent actions into array
+
                 rng, _rng = jax.random.split(rng)
-                rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-
-                # this steps all the environments in parallel at the same time
+                rng_step = jax.random.split(_rng, config["NUM_ENVS"]) 
                 obsv, env_state, reward, done, info = jax.vmap(
-                    env.step, in_axes=(0, 0, 0)
+                    env.step, in_axes=(0,0,0) # step forward all environment simultaneously
                 )(rng_step, env_state, env_act)
-                
+
+                done_flat = batchify_int_dict(done, env.agents, config["NUM_ACTORS"]).squeeze()
+
                 info = jax.tree_map(
-                    lambda x: x.reshape((config["NUM_ACTORS"],)) if x.size == (config["NUM_ENVS"],) else x,
-                    info
+                    lambda x: x.reshape((config["NUM_ACTORS"],)) if x.size == config["NUM_ENVS"] else x,
+                    info,
                 )
-                transition = Transition( # as in the transition class defined earlier, this stores the transition object for this particular time step, which is what PPO needs later (log prob and value specifically)
-                    batchify_int_dict(done, env.agents, config["NUM_ACTORS"]).squeeze(),
+
+                # obtain everything needed for PPO: done flag for each actors episode ended, action sampled at timestep, critic valu estimate, flatten reward, log prob, o_t
+                transition = Transition(
+                    done_flat,
                     action,
                     value,
                     batchify_int_dict(reward, env.agents, config["NUM_ACTORS"]).squeeze(),
                     log_prob,
                     obs_batch,
-                    info,
-                    )
+                    last_done,
+                    info, 
+                )
 
-                runner_state = (train_state, env_state, obsv, update_step, rng) # this updates the observation, and it is where the env_state gets updated
+                runner_state = (train_state, env_state, obsv, done_flat, new_hstate, update_step, rng) # update runner state for next update step. 
                 return runner_state, transition
 
             runner_state, traj_batch = jax.lax.scan(
@@ -565,7 +563,7 @@ def make_train(config):
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, env_state, obsv, 0, _rng)
+        runner_state = (train_state, env_state, obsv, jnp.zeros((config["NUM_ACTORS"],), dtype=bool), jnp.zeros((config["NUM_ACTORS"], config["GRU_HIDDEN_DIM"])), 0, _rng)
         runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
