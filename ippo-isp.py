@@ -382,10 +382,10 @@ def make_train(config):
             )
 
             # CALCULATE ADVANTAGE
-            train_state, env_state, last_obs, update_step, rng = runner_state
+            train_state, env_state, last_obs, last_done, hstate, update_step, rng = runner_state
 
             last_obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *env.observation_space().shape)
-            _, last_val = network.apply(train_state.params, last_obs_batch) # we need the final value of the next state to compute our advantage using GAE
+            _, _, last_val = network.apply(train_state.params, hstate, last_obs_batch, last_done) # we need the final value of the next state to compute our advantage using GAE
 
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
@@ -418,93 +418,57 @@ def make_train(config):
 
             # UPDATE NETWORK for one epoch...remember we'll do multiple passes over the same rollout data
             def _update_epoch(update_state, unused, i):
-                def _update_minbatch(train_state, batch_info, network_used):
+                def _update_minbatch(train_state, batch_info):
                     '''
                     gradient descent for one minibatch
                     '''
-                    traj_batch, advantages, targets = batch_info # unpack the mini batch data
+                    traj_mb, advantages_mb, targets_mb, hstate_mb = batch_info # unpack the mini batch data
+                    # traj_mb fields: (NUM_STEPS, MINIBATCH_SIZE,...)
+                    # advantages_mb: (NUM_STEPS, MINIBATCH_SIZE)
+                    # targets_mb: (NUM_STEPS, MINIBATCH_SIZE)
+                    # hstate_mb: (MINIBATCH_SIZE, GRU_HIDDEN_DIM)
 
-                    def _loss_fn(params, traj_batch, gae, targets, network_used):
-                        # RERUN NETWORK...we do this because above, within the transition object, we stored the old log prob, action and value...now with PPO, we want to compare our current action/value/log_prob to our old ones to updates params accordingly
-                        pi, value = network_used.apply(params, traj_batch.obs)
-                        log_prob = pi.log_prob(traj_batch.action)
-                        # CALCULATE VALUE LOSS
+                    # compute the loss function: 
+                    def _loss_fn(params, traj_mb, advantages_mb, targets_mb, hstate_mb):
+                        # Replay the full sequence through the GRU (back prop through time)
 
-                        # V_param^{clip}(s_t) = V_old(s_t) + clip(V_param(s_t)-V_old, -eps, eps)...where V_param is the value calculated with the current params 
-                        value_pred_clipped = traj_batch.value + (
-                            value - traj_batch.value
+                        def step_fn(carry, x): # take current hidden state carry, and update hidden state
+                            obs, last_done = x # also include last_done flag to wipe memory if needed to prevent memory leak
+                            new_carry, pi, value = network.apply(params, carry, obs, last_done)
+                            return new_carry, (pi, value)
+                        
+                        # recurrent forward pass, which outputs action sequence distribution and value sequence distribution
+                        _, (pi_seq, value_seq) = jax.lax.scan( 
+                            step_fn,
+                            hstate_mb,
+                            (traj_mb.obs, traj_mb.last_done),
+                        )
+                        # pi_seq logits: (NUM_STEPS, MINIBATCH_SIZE, action_dim)
+                        # value_seq: (NUM_STEPS, MINIBATCH_SIZE)
+
+                        log_prob = pi_seq.log_prob(traj_mb.action) # compute the log probs under new policy
+
+                        # value clip function
+                        value_pred_clipped = traj_mb.value + (
+                            value_seq- traj_mb.value
                         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
-                        # Now we compute two losses, Loss1 = (V_param - target)^2
-                        value_losses = jnp.square(value - targets)
-                        value_losses_clipped = jnp.square(value_pred_clipped - targets) # the second loss computed is Loss_2 = (V_clipped - target)^2
-                        value_loss = (
-                            0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
-                        ) # because we trained over a whole batch and we now have two vectors of losses, we compute the mean of the maximum values, to smooth out the variance and then the 0.5 actually simplifies the grad calc
-                        # also note here that we take the maximum of the two losses in order to penalise the largest error
 
-                        # CALCULATE ACTOR LOSS
-                        # this is just pi_param/pi_old ratio
-                        # Remember that we use log probs instead of prob for numerical stability...in our nets, sometimes the actual probs can be 0.000004 say and 0.00002 and dividing by these numbers, we could have floating point underflow, which results in us dividing by zero and exploding gradients happen...log probs fix this
-                        ratio = jnp.exp(log_prob - traj_batch.log_prob)
-                        gae = (gae - gae.mean()) / (gae.std() + 1e-8) # normalise the advantage, which stabilises increase/decrease of params in update step
-                        loss_actor1 = ratio * gae #pi_param/pi_old * A_t
-                        loss_actor2 = ( # clipped part of the final loss function
-                            jnp.clip(
-                                ratio,
-                                1.0 - config["CLIP_EPS"],
-                                1.0 + config["CLIP_EPS"],
-                            )
-                            * gae
-                        )
-                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2) # take conservative loss which we want to  minimise, that is why we use minimum. Moreover, the neg sign is there because PPO actually seeks to maximise J(theta)...but here in the gradient-based method, we seek to minimise a loss function, which is why we take the negative of it
-                        loss_actor = loss_actor.mean() # take the mean because we will have a vector of per sample losses.  
-                        entropy = pi.entropy().mean() # we add this entropy bonus term here so that the agent continues to explore the environment, and does not settle on some local minimum too soon
+                        # loss function value computation: 
+                        value_losses = jnp.square(value_seq - targets_mb)
+                        value_losses_clipped = jnp.square(value_pred_clipped - targets_mb) 
+                        value_loss = 0.5*jnp.maximum(value_losses, value_losses_clipped).mean() # because we trained over a whole batch and we now have two vectors of losses, we compute the mean of the maximum values, to smooth out the variance and then the 0.5 actually simplifies the grad calc
 
-                        total_loss = (
-                            loss_actor
-                            + config["VF_COEF"] * value_loss
-                            - config["ENT_COEF"] * entropy
-                        )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        ratio = jnp.exp(log_prob - traj_mb.log_prob) # r(theta) = pi_new/pi_old
 
+                        gae = (advantages_mb - advantages_mb.mean()) / (advantages_mb.std() + 1e-8) # here we normalise the advantages
+                        loss_actor1 = ratio*gae
+                        loss_actor2 = jnp.clip(ratio, 1.0-config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae
+                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2).mean() # PPO objective function
 
-                    grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-                    # evaluate the current loss and grads wrt current params
-                    total_loss, grads = grad_fn(
-                            train_state.params, traj_batch, advantages, targets, network_used
-                        )
-                    train_state = train_state.apply_gradients(grads=grads) # apply optimiser so that params get updated
-                    return train_state, total_loss
-
-                train_state, traj_batch, advantages, targets, rng = update_state 
-                rng, _rng = jax.random.split(rng) 
-                batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ACTORS"]
-                ), "batch size must be equal to number of steps * number of actors"
-                permutation = jax.random.permutation(_rng, batch_size) 
-                batch = (traj_batch, advantages, targets)
-                batch = jax.tree_util.tree_map(
-                        lambda x: x.reshape((batch_size,) + x.shape[2:]), batch
-                    )
-
-                shuffled_batch = jax.tree_util.tree_map( # randomise the rollout data, as the rollout data that was collected is sequential, and we want to avoid correlation between transitions
-                    lambda x: jnp.take(x, permutation, axis=0), batch
-                )
-                minibatches = jax.tree_util.tree_map( # split the shuffled rollout data into minibatches
-                    lambda x: jnp.reshape(
-                        x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])
-                    ),
-                    shuffled_batch,
-                )
-
-                train_state, total_loss = jax.lax.scan( # run gradient update step through each of the minibatches, and then update network params
-                    lambda state, batch_info: _update_minbatch(state, batch_info, network), train_state, minibatches
-                )
-
-                update_state = (train_state, traj_batch, advantages, targets, rng)
-
-                return update_state, total_loss
+                        # measure entropy of policy (higher value indicates more exporation, while lower value indicates more deterministic)
+                        entropy = pi_seq.entropy().mean()
+                        total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"]*entropy
+                        return total_loss, (value_loss, loss_actor, entropy) # we use the total_loss for backprop, and the vector shall be used for diagnostics
             
             update_state = (train_state, traj_batch, advantages, targets, rng)
             update_state, loss_info = jax.lax.scan(
