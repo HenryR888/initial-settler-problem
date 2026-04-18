@@ -1760,13 +1760,13 @@ class ISP(MultiAgentEnv):
             gamma_h=0.1, # river damage per harvest action for (D_t,i in regen function)
             beta_v = 0.2, # energy loss per invest action
             gamma_v=0.3, # river health increase per invest (for I_t in regen function)
-            g = 0.01, # NoOp energy gain for agent not doing anything at that specific number step
+            g = 0.05, # NoOp energy gain for agent not doing anything at that specific number step
             K_collapse_thresh = 0.1, # river health level collapse threshold (after k steps below threshold, episode transitions into terminal state)
             k_collapse_steps = 5, # number of steps below K before episode collapses
             sigma_noise = 0.05, # standard deviation for Normal distribution for noise
             #reward function hyperparams:
             w_f=1.0, # weight for delta energy
-            w_h = 5.0, # weight for Indicator function for agent being below survival threshold...if agent is below threshold - huge penalty
+            w_h = 1.0, # weight for Indicator function for agent being below survival threshold...if agent is below threshold - huge penalty
             w_c = 1.0, # weight for indicator function for river health being below K collapse shreshold
             w_p=0.1, # weight for indicator function for agent being punished
             lambda_h = 0.1, # hunger threshold for energy level...if energy level drops below this, agent is penalised heavily with w_h
