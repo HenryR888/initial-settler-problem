@@ -26,10 +26,10 @@ CONFIG = {
     "LR": 0.0003,
     "GRU_HIDDEN_DIM": 128, # dimension for h_t for GRU
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
-    "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing policy update
+    "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing policy update 
     "TOTAL_TIMESTEPS": 1e8, # total number of time steps before training ends
     "UPDATE_EPOCHS": 2, # number of times we iterate over the rollot data before collecting new data 
-    "NUM_MINIBATCHES": 8, # here within the CNN GRU, we have 8 minibatches of 24 sequences each...with the reason being that we need it to divide NUM_ACTORS = NUM_ENVS * num_agents = 64*3=192, since PPO needs to split data according to sequence
+    "NUM_MINIBATCHES": 8, # here within the CNN GRU, we have 8 minibatches of 24 sequences each...with the reason being that we need it to divide NUM_ACTORS = NUM_ENVS * num_agents = 64*3=192, since PPO needs to split data according to sequence 
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95, # used within the Generalised Advantage Estimator for A_t
     "CLIP_EPS": 0.2, # epsilon in the clip objective function...interpretation is that policy is not allowed to change by more than 20% per update step...remember that if we have one bad gradient step then the policy collapses.
@@ -297,7 +297,7 @@ def make_train(config):
 
         rng, _rng = jax.random.split(rng)
         init_hstate = jnp.zeros((1, config["GRU_HIDDEN_DIM"]))
-        init_obs = jnp.zeros((1, *env.observation_space().shape)) # here we create a dummy tensor in order to initialise our network in the next step.
+        init_obs = jnp.zeros((1, *env.observation_space()[1])) # here we create a dummy tensor in order to initialise our network in the next step.
         init_done= jnp.zeros((1,), dtype=bool)
         network_params = network.init(_rng, init_hstate, init_obs, init_done) # initialising neural network with dummy tensor (batch, width, height, channels), initial memory statem and initial done state. 
 
@@ -341,13 +341,13 @@ def make_train(config):
                 train_state, env_state, last_obs, last_done, hstate, update_step, rng = runner_state # unpack everything from current training environment
 
                 rng, _rng = jax.random.split(rng)
-                obs_batch = jnp.transpose(last_obs, (1,0,2,3,4)).reshape(-1, *env.observation_space().shape) # transpose and flatten to obtain batch of actor observations
+                obs_batch = jnp.transpose(last_obs, (1,0,2,3,4)).reshape(-1, *env.observation_space()[1]) # transpose and flatten to obtain batch of actor observations
 
                 new_hstate, pi, value = network.apply(train_state.params, hstate, obs_batch, last_done) # run the actor/critic GRU network 
                 action = pi.sample(seed=_rng) # sample an action from that pi that was outputted, and then compute log_prob
                 log_prob = pi.log_prob(action)
                 env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
-                env_act = [v for v in env_act.values()] # per-agent actions into array
+                env_act = [v.squeeze(-1) for v in env_act.values()] # squeeze trailing dim: (NUM_ENVS, 1) -> (NUM_ENVS,)
 
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"]) 
@@ -355,19 +355,15 @@ def make_train(config):
                     env.step, in_axes=(0,0,0) # step forward all environment simultaneously
                 )(rng_step, env_state, env_act)
 
-                done_flat = batchify_int_dict(done, env.agents, config["NUM_ACTORS"]).squeeze()
-
-                info = jax.tree_map(
-                    lambda x: x.reshape((config["NUM_ACTORS"],)) if x.size == config["NUM_ENVS"] else x,
-                    info,
-                )
+                # done has string keys {'0': (NUM_ENVS,), ...}...stack agents-first and then output (NUM_ACTORS,)
+                done_flat = jnp.stack([done[str(a)] for a in env.agents]).reshape(-1)
 
                 # obtain everything needed for PPO: done flag for each actors episode ended, action sampled at timestep, critic valu estimate, flatten reward, log prob, o_t
                 transition = Transition(
                     done_flat,
                     action,
                     value,
-                    batchify_int_dict(reward, env.agents, config["NUM_ACTORS"]).squeeze(),
+                    reward.T.reshape(-1),  # (NUM_ENVS, num_agents) -> agents-first -> (NUM_ACTORS,)
                     log_prob,
                     obs_batch,
                     last_done,
@@ -384,7 +380,7 @@ def make_train(config):
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, last_done, hstate, update_step, rng = runner_state
 
-            last_obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *env.observation_space().shape)
+            last_obs_batch = jnp.transpose(last_obs,(1,0,2,3,4)).reshape(-1, *env.observation_space()[1])
             _, _, last_val = network.apply(train_state.params, hstate, last_obs_batch, last_done) # we need the final value of the next state to compute our advantage using GAE
 
             def _calculate_gae(traj_batch, last_val):
@@ -668,7 +664,7 @@ def evaluate(params, env, save_path, config):
     for o_t in range(config["GIF_NUM_FRAMES"]):
 
         obs_batch = jnp.stack([obs[a] for a in env.agents]).reshape(-1, *env.observation_space()[0].shape)
-        network = ActorCritic(action_dim=env.action_space().n, activation="relu")  # apply the trained params to the current obs
+        network = ActorCriticGRU(action_dim=env.action_space().n, activation="relu")  # apply the trained params to the current obs
         pi, _ = network.apply(params, obs_batch)
         rng, _rng = jax.random.split(rng)
         actions = pi.sample(seed=_rng)
