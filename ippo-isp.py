@@ -24,7 +24,7 @@ CONFIG = {
     "SEED": 42,
     "NUM_SEEDS": 1,
     "LR": 0.0003,
-    "GRU_HIDDEN_DIM: 128" # dimension for h_t for GRU
+    "GRU_HIDDEN_DIM": 128, # dimension for h_t for GRU
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
     "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing policy update
     "TOTAL_TIMESTEPS": 1e8, # total number of time steps before training ends
@@ -312,7 +312,7 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
-        # this guy stores everything we need to train the model in one object: the params, how to run the net (apply_fn), the optimiser from above (tx)
+        # here we store everything we need to train the model in one object: the params, how to run the net (apply_fn), the optimiser from above (tx)
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
@@ -346,7 +346,7 @@ def make_train(config):
                 new_hstate, pi, value = network.apply(train_state.params, hstate, obs_batch, last_done) # run the actor/critic GRU network 
                 action = pi.sample(seed=_rng) # sample an action from that pi that was outputted, and then compute log_prob
                 log_prob = pi.log_prob(action)
-                env_act = unbatchify(action, env.agents, config["NUM_AGENTS"], env.num_agents)
+                env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
                 env_act = [v for v in env_act.values()] # per-agent actions into array
 
                 rng, _rng = jax.random.split(rng)
@@ -420,17 +420,20 @@ def make_train(config):
             def _update_epoch(update_state, unused, i):
                 def _update_minbatch(train_state, batch_info):
                     '''
-                    gradient descent for one minibatch
+                    here we perform one gradient update on one recurrent minibatch
                     '''
+                    
                     traj_mb, advantages_mb, targets_mb, hstate_mb = batch_info # unpack the mini batch data
-                    # traj_mb fields: (NUM_STEPS, MINIBATCH_SIZE,...)
+                    # traj_mb fields: (NUM_STEPS, MINIBATCH_SIZE,...) 
                     # advantages_mb: (NUM_STEPS, MINIBATCH_SIZE)
-                    # targets_mb: (NUM_STEPS, MINIBATCH_SIZE)
+                    # targets_mb: (NUM_STEPS, MINIBATCH_SIZE) 
+                    # !NOTE: important that we replay data over NUM_STEPS, so that we preserve the temporal sequence for GRU 
                     # hstate_mb: (MINIBATCH_SIZE, GRU_HIDDEN_DIM)
+
 
                     # compute the loss function: 
                     def _loss_fn(params, traj_mb, advantages_mb, targets_mb, hstate_mb):
-                        # Replay the full sequence through the GRU (back prop through time)
+                        # Replay the full sequence through the GRU and back prop through time
 
                         def step_fn(carry, x): # take current hidden state carry, and update hidden state
                             obs, last_done = x # also include last_done flag to wipe memory if needed to prevent memory leak
@@ -446,29 +449,95 @@ def make_train(config):
                         # pi_seq logits: (NUM_STEPS, MINIBATCH_SIZE, action_dim)
                         # value_seq: (NUM_STEPS, MINIBATCH_SIZE)
 
-                        log_prob = pi_seq.log_prob(traj_mb.action) # compute the log probs under new policy
+                        log_prob = pi_seq.log_prob(traj_mb.action) # compute the log probs of the actions that were taken under current policy
 
-                        # value clip function
+                        # value clip function: V_old + clip(V_new - V_old, -eps, eps)
                         value_pred_clipped = traj_mb.value + (
                             value_seq- traj_mb.value
                         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
 
                         # loss function value computation: 
-                        value_losses = jnp.square(value_seq - targets_mb)
+                        value_losses = jnp.square(value_seq - targets_mb) # squared error of new value prediction and target, where target is the updated old value using the GAE estimation of the advantage. 
                         value_losses_clipped = jnp.square(value_pred_clipped - targets_mb) 
                         value_loss = 0.5*jnp.maximum(value_losses, value_losses_clipped).mean() # because we trained over a whole batch and we now have two vectors of losses, we compute the mean of the maximum values, to smooth out the variance and then the 0.5 actually simplifies the grad calc
 
                         ratio = jnp.exp(log_prob - traj_mb.log_prob) # r(theta) = pi_new/pi_old
 
-                        gae = (advantages_mb - advantages_mb.mean()) / (advantages_mb.std() + 1e-8) # here we normalise the advantages
-                        loss_actor1 = ratio*gae
-                        loss_actor2 = jnp.clip(ratio, 1.0-config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae
-                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2).mean() # PPO objective function
+                        gae = (advantages_mb - advantages_mb.mean()) / (advantages_mb.std() + 1e-8) # here we normalise the advantages, in order to centre bias around 0 so that -ve and +ve advantage correspond to correct signal
+                        loss_actor1 = ratio*gae # surrogate object, which is just a proxy to update policy: L_1 = r_t.A_t...if normalised advantage is positive, then update policy in proportion to make that particular action in that state more likely, and vice versa. 
+                        loss_actor2 = jnp.clip(ratio, 1.0-config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae # to prevent instability during training for r_t becoming too large, we clip r_t. 
+                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2).mean() # final PPO surrogate clip objective function...we want to maximise the objective function, which means minimising the loss. 
 
                         # measure entropy of policy (higher value indicates more exporation, while lower value indicates more deterministic)
                         entropy = pi_seq.entropy().mean()
-                        total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"]*entropy
+                        total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"]*entropy # we include the value_loss here to train the critic network in parallel, which should make advantage calculations more accurate, and thus policy updates better. We subtract the entropy term to encourage the policy to continue exploring. 
                         return total_loss, (value_loss, loss_actor, entropy) # we use the total_loss for backprop, and the vector shall be used for diagnostics
+
+                    grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
+                    (total_loss, (value_loss, loss_actor, entropy)), grads = grad_fn(
+                        train_state.params, traj_mb, advantages_mb, targets_mb, hstate_mb
+                    )
+                    train_state = train_state.apply_gradients(grads=grads) # update gradients
+                    return train_state, total_loss
+                
+                train_state, traj_batch, advantages, targets, rng = update_state
+                rng, _rng = jax.random.split(rng)
+
+                minibatch_size = config["MINIBATCH_SIZE"] # recall MINIBATCH_SIZE = NUM_ACTORS // NUM_MINIBATCHES...and thus we need to partition actors evenly into minibatches for shuffling 
+                assert config["NUM_ACTORS"] % config["NUM_MINIBATCHES"] == 0, \
+                    f"NUM_ACTORS ({config['NUM_ACTORS']}) must be divisible by NUM_MINIBATCHES ({config['NUM_MINIBATCHES']})"
+                
+                # shuffle over the actor sequences (axis = 1)...i.e. shuffle ofer NUM_ACTORS...here we do note shuffle over time_steps, but rather over actors, since shuffling over time steps would destory the temporal data structure for GRU 
+                permutation = jax.random.permutation(_rng, config["NUM_ACTORS"])
+
+                # now we build the update batch from traj_batch fieldds (note that we exclude info, which has incompatible shape)
+                # all these fields below have shape (NUM_STEPS, NUM_ACTORS, ...)
+                fields_for_update = (
+                    traj_batch.done,
+                    traj_batch.action, 
+                    traj_batch.value,
+                    traj_batch.reward,
+                    traj_batch.log_prob,
+                    traj_batch.obs,
+                    traj_batch.last_done,
+                )
+                shuffled_fields = jax.tree_util.tree_map(
+                    lambda x: jnp.take(x, permutation, axis=1), fields_for_update
+                ) 
+                shuffled_adv = jnp.take(advantages, permutation, axis=1)
+                shuffled_tgt = jnp.take(targets, permutation, axis=1)
+                shuffled_hstate = jnp.take(init_hstate, permutation, axis=0) # Shape is (NUM_ACTORS, GRU_HIDDEN_DIM)
+
+                # split into (NUM_MINIBATCHES, NUM_STEPS, MINIBATCH_SIZE,...)
+                def split_seqs(x):
+                    # x: (NUM_STEPS, NUM_ACTORS, ...) -> (NUM_MINIBATCHES, NUM_STEPS, MINIBATCH_SIZE,...) (remember that NUM_ACTORS = NUM_MINIBATCHES * MINIBATCH_SIZE)
+                    return x.reshape(
+                        (x.shape[0], config["NUM_MINIBATCHES"], minibatch_size) + x.shape[2:]
+                    ).swapaxes(0,1)
+                
+                (done_mb, action_mb, value_mb, reward_mb, log_prob_mb, obs_mb, last_done_mb) = \
+                    jax.tree_util.tree_map(split_seqs, shuffled_fields)
+                
+                adv_mb = shuffled_adv.reshape(config["NUM_STEPS"], config["NUM_MINIBATCHES"], minibatch_size).swapaxes(0,1)
+                tgt_mb = shuffled_tgt.reshape(config["NUM_STEPS"], config["NUM_MINIBATCHES"], minibatch_size).swapaxes(0,1)
+                hstate_mb = shuffled_hstate.reshape(config["NUM_MINIBATCHES"], minibatch_size, config["GRU_HIDDEN_DIM"])
+
+                # here we reconstruct the transition-shaped objects for each minibatch...we leave info as zeroes, since it is not used in loss
+                traj_mbs = Transition(
+                    done = done_mb, action=action_mb, value=value_mb, reward=reward_mb,
+                    log_prob=log_prob_mb, obs = obs_mb, last_done= last_done_mb,
+                    info = jnp.zeros(config["NUM_MINIBATCHES"]),
+                )
+
+                minibatches = (traj_mbs, adv_mb, tgt_mb, hstate_mb)
+
+                train_state, total_loss = jax.lax.scan(
+                    lambda state, batch_info: _update_minbatch(state, batch_info), # on each step, apply one gradient update step ...then return the train_state which is all the params after all minibatch updates in the epoch 
+                    train_state, minibatches,
+                )
+
+                update_state = (train_state, traj_batch, advantages, targets, rng)
+                return update_state, total_loss
             
             update_state = (train_state, traj_batch, advantages, targets, rng)
             update_state, loss_info = jax.lax.scan(
@@ -522,7 +591,7 @@ def make_train(config):
 
             jax.debug.callback(callback, metric)
 
-            runner_state = (train_state, env_state, last_obs, update_step, rng)
+            runner_state = (train_state, env_state, last_obs, last_done, hstate, update_step, rng)
 
             return runner_state, metric
 
@@ -545,7 +614,7 @@ def single_run(config):
         tags=config["WANDB_TAGS"],
         config=config,
         mode=config["WANDB_MODE"],
-        name=f'ippo_cnn_isp',
+        name=f'ippo_gru_isp',
     )
 
     rng = jax.random.PRNGKey(config["SEED"])
