@@ -27,7 +27,7 @@ CONFIG = {
     "GRU_HIDDEN_DIM": 128, # dimension for h_t for GRU
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
     "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing policy update 
-    "TOTAL_TIMESTEPS": 1e8, # total number of time steps before training ends
+    "TOTAL_TIMESTEPS": 5e6, # total number of time steps before training ends (!NOTE DEMO RUN IS 5e6 timesteps...default is 1e8)
     "UPDATE_EPOCHS": 2, # number of times we iterate over the rollot data before collecting new data 
     "NUM_MINIBATCHES": 8, # here within the CNN GRU, we have 8 minibatches of 24 sequences each...with the reason being that we need it to divide NUM_ACTORS = NUM_ENVS * num_agents = 64*3=192, since PPO needs to split data according to sequence 
     "GAMMA": 0.99,
@@ -45,7 +45,7 @@ CONFIG = {
     "ANNEAL_LR": False, # NOTE: switch to True if you want learning rate to decay linearly over training
     "GIF_NUM_FRAMES": 250, # length of evaluation for GIF evaluation...this is only for visualising post-training
     # WandB Params
-    "ENTITY": "",
+    "ENTITY": "henryrochester8-university-of-cape-town",
     "PROJECT": "isp",
     "WANDB_MODE" : "online", # NOTE: for dev, set to offline
     "WANDB_TAGS": ["3-agents", "ippo-gru"],
