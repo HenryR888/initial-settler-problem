@@ -8,6 +8,14 @@ This repository contains the development version of the ISP environment and asso
 
 ISP is derived from the Clean Up-style multi-agent environment lineage and extends it with new institutional and reward dynamics specific to the Initial Settler Problem.
 
+## Research Context
+
+This project is developed as part of ongoing research in multi-agent reinforcement learning and emergent norm formation.
+
+The work is conducted under the supervision of Professor Jonathan Shock (University of Cape Town).
+
+Research guidance and technical input has been provided by Claude Formanek (PhD student, University of Cape Town).
+
 ## Attribution
 
 This project builds on:
