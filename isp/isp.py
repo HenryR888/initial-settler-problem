@@ -2268,7 +2268,9 @@ class ISP(MultiAgentEnv):
             reset_inner = (inner_t == num_inner_steps) | collapse_done # also reset if reached total number of time steps specified within the episode
 
             state_re = _reset_state(key)
-            state_re = state_re.replace(outer_t=outer_t+1)
+            state_re = state_re.replace(
+                outer_t = jnp.where(outer_t+1 >= num_outer_steps, jnp.int32(0), outer_t +1 )
+            )
 
             state = jax.tree_map( # if the episode is terminated, then reset, otherwise, go to the next state
                 lambda x, y: jnp.where(reset_inner, x, y),
@@ -2277,8 +2279,7 @@ class ISP(MultiAgentEnv):
             )
 
             # check to see that training is done, if so then give done flag
-            outer_t = state.outer_t 
-            reset_outer = outer_t == num_outer_steps
+            reset_outer = reset_inner & (outer_t + 1 >= num_outer_steps)
             done = {f'{a}': reset_outer for a in self.agents}
             done["__all__"] = reset_outer
 
