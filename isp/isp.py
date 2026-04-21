@@ -39,6 +39,7 @@ class State:
     grid: jnp.ndarray # (H,W)...that is the (height, width) of the spatial grid in which the agents operate
     inner_t: int # current timestep within episode
     outer_t: int # current episode index number
+    last_comms: jnp.ndarray # (n,4)...this is our last_comm tuple per agent, which is the [claim_level, accuse_target, charge, recommend]
 
     # ! still need to add last_claims, which will be a vector which keeps track of last claim made by agents for the Lie metric...I will come back to this once adding communication action !
 
@@ -203,7 +204,15 @@ class ISP(MultiAgentEnv):
                     '  P    P    P  ',
                     '   P    P    P ',
                     'WWWWWWWWWWWWWWW',
-                ]
+                ],
+            # reputation and audit hyperparams:
+            p_err=0.1, # error of faulty communication i.e. audit signal is flipped
+            qmax=1.5, # greedy (harvest-invest ratio) threshold, beyond which agent is considered to freeload
+            freeload_thresh=0.05, # invest threshold below which we shall consider the agent is freeloading...need both because ratio is not enough (i.e. free loading also should be considered if agent harvests same amount as investing)
+            lie_tolerance=1, # one lie is allowed, lying more than that allows for punishment...we can tweak this to see how dynamics change
+            delta_rep=0.05, # change in reputation score...!NOTE perhaps we adjust this to a function-based reputation
+            eps_greed=1e-3, # epsilon added to harvest-invest (greed ratio) to prevent division by zero
+            K_claim_bins=5, # [very_low, low, medium, high, very high] claim for river level
     ):
         super().__init__(num_agents=num_agents)
 
@@ -223,6 +232,14 @@ class ISP(MultiAgentEnv):
         self.lambda_h = lambda_h
         self.c_pun = c_pun
         self.c_rec = c_rec
+        self.p_err = p_err
+        self.qmax = qmax
+        self.freeload_thresh = freeload_thresh
+        self.lie_tolerance = lie_tolerance
+        self.delta_rep = delta_rep
+        self.eps_greed = eps_greed
+        self.K_claim_bins = K_claim_bins
+        self.COMM_NORM = jnp.array([K_claim_bins-1, num_agents, 3, 3], dtype=jnp.float32) # normalise the communication component to [0,1] before putting it into obs
         self.cnn = cnn
         self.agent_ids = agent_ids
         self.num_inner_steps = num_inner_steps
@@ -538,10 +555,15 @@ class ISP(MultiAgentEnv):
             """Step the ISP environment:"""
 
             # split the keys upfront so the different noise sources are independent...river noise needs to be independent from observation noise, so agents do not infer true river state from noise structure
-            # Moreover, we do not want collision key to be correlated with river noise or obs noise, otherwise agents could use collision dynamics to infer state of river/observation of other agents
-            key, k_river_noise, k_obs_noise, k_collision = jax.random.split(key, 4)
+            # Moreover, we do not want collision key to be correlated with river noise or obs noise, otherwise agents could use collision dynamics to infer state of river/observation of other agents. Also add audit key for communcation audit signal error
+            key, k_river_noise, k_obs_noise, k_collision, k_audit_err = jax.random.split(key, 5)
 
-            actions = jnp.array(actions)
+            actions = jnp.array(actions) # shape (num_agents, 5)
+            env_actions = actions[:,0] # move/harvest/invest/punish
+            claim_levels = actions[:,1] # river claim (0,4)
+            accuse_targets = actions[:,2] # which agent we accuse (0=no one, 1...n= agent index+1)...agent cannot accuse himself
+            charges = actions[:,3] # charge type (0=none, 1=greedy, 2=freeload, 3=lie)
+            recommends = actions[:,4] # recommendation (0=none, 1=harvest-less, 2=harvest-more, 3=invest-more)
 
             grid = state.grid.at[
                 # clear agents from the grid first:
