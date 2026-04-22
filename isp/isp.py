@@ -209,7 +209,7 @@ class ISP(MultiAgentEnv):
             p_err=0.1, # error of faulty communication i.e. audit signal is flipped
             qmax=1.5, # greedy (harvest-invest ratio) threshold, beyond which agent is considered to freeload
             freeload_thresh=0.05, # invest threshold below which we shall consider the agent is freeloading...need both because ratio is not enough (i.e. free loading also should be considered if agent harvests same amount as investing)
-            lie_tolerance=1, # one lie is allowed, lying more than that allows for punishment...we can tweak this to see how dynamics change
+            lie_tolerance=1, # one claim_bin level off is allowed (could have been erroneous due to error)...but more than 1 is considered a strategic lie
             delta_rep=0.05, # change in reputation score...!NOTE perhaps we adjust this to a function-based reputation
             eps_greed=1e-3, # epsilon added to harvest-invest (greed ratio) to prevent division by zero
             K_claim_bins=5, # [very_low, low, medium, high, very high] claim for river level
@@ -579,15 +579,15 @@ class ISP(MultiAgentEnv):
                 lambda p, a: jnp.int16(p+self.ROTATIONS[a]) % jnp.array( # rotate all agents at once 
                     [self.GRID_SIZE_ROW + 1, self.GRID_SIZE_COL+1, 4], dtype=jnp.int16
                 )
-            )(state.agent_locs, actions).squeeze()
+            )(state.agent_locs, env_actions).squeeze()
 
             agent_move = ( # boolean mask to update agents' locations in the next step, given that they chose a movement action
-                (actions == Actions.up) | (actions == Actions.down) | 
-                (actions == Actions.left) | (actions == Actions.right)
+                (env_actions == Actions.up) | (env_actions == Actions.down) | 
+                (env_actions == Actions.left) | (env_actions == Actions.right)
             )
             all_new_locs = jax.vmap( # move all the agents accordingly to their new respective locations
                 lambda m, n, a: jnp.where(m,n+self.STEP_MOVE[a], n)
-            )(agent_move, all_new_locs, actions)
+            )(agent_move, all_new_locs, env_actions)
 
             all_new_locs = jax.vmap( # make sure that the agent's move does not cause it to move off the grid...thus, clip its bounds to prevent further handling
                 jnp.clip, in_axes = (0, None, None)
@@ -624,11 +624,11 @@ class ISP(MultiAgentEnv):
 
 
             # classify agent actions to update energy levels, cumulative harvest and cumulative invest, c_pun, c_rec, w_p to reward
-            harvesting = (actions == Actions.harvest) & on_river
-            investing = (actions == Actions.invest) & on_river
-            noop = (actions == Actions.stay)
-            punishing = actions >= 9 # Recall Punish(j) = 9 + j
-            punish_target = jnp.clip(actions-9, 0, num_agents-1)
+            harvesting = (env_actions == Actions.harvest) & on_river
+            investing = (env_actions == Actions.invest) & on_river
+            noop = (env_actions == Actions.stay)
+            punishing = env_actions >= 9 # Recall Punish(j) = 9 + j
+            punish_target = jnp.clip(env_actions-9, 0, num_agents-1)
 
             # Update per agent energy levels: 
             energy_old = state.energy # vector with per agent energy levels
@@ -654,7 +654,7 @@ class ISP(MultiAgentEnv):
             eps_t = jax.random.normal(k_river_noise)* self.sigma_noise # eps_t ~ N(0, sigma^2)
 
             R_t = state.river_level
-            R_new = jnp.clip( # update river level according to logistic regeneration process abot
+            R_new = jnp.clip( # update river level according to logistic regeneration process above
                 R_t + self.alpha*R_t*(1.0-R_t) - D_t + I_t + eps_t, 
                 0.0, 1.0
             )
@@ -672,6 +672,64 @@ class ISP(MultiAgentEnv):
             # update the cumulative harvest and invest amount to be used in the greed metric: 
             new_cumulative_harvest = state.cumulative_harvest + harvesting.astype(jnp.float32)
             new_cumulative_invest = state.cumulative_invest + investing.astype(jnp.float32)
+
+            # Social Audit & Reputation Update: 
+
+            # True metrics (computed from the cumulative counts):
+            greed_true = (
+                (new_cumulative_harvest+self.eps_greed)/
+                (new_cumulative_invest+self.eps_greed)
+            ) > self.qmax
+
+            avg_invest_per_step = new_cumulative_invest/(state.inner_t+1.0)
+            freeload_true = avg_invest_per_step < self.freeload_thresh
+
+            # we have set 5 bins here for the R_t river health: [VERY LOW, LOW, MEDIUM, HIGH, VERY HIGH].
+            # We take the actual R_t (R_new latest update of river) and multiply by 5. Thus we have the following corresponding mapping:
+            # 0=[0,0.2), 1=[0.2,0.4), 2=[0.4,0.6), 3=[0.6,0.8), 4=[0.8,1.0]
+            realised_bin = jnp.clip(
+                jnp.floor(R_new*self.K_claim_bins).astype(jnp.int32), 0, self.K_claim_bins -1
+            )
+            # here we check to see if the agent's previous claim was off compared to the realised river level by more than the lie_tolerance (default is set to 1). I.e. agent claimed river was low when it was actually very low is not considered strategic lie. But agent claiming river is high when agent is low, is off by 2 and thus is considered a lie.
+            lie_true = (
+                jnp.abs(state.last_comms[:,0].astype(jnp.int32) - realised_bin) > self.lie_tolerance
+            )
+
+            # Accusation is valid only when both the target and charge entries are non-zero: 
+            is_accusing = (accuse_targets>0)&(charges>0)
+            accused_idx = jnp.clip(accuse_targets-1, 0, num_agents-1) # here we are 0 indexing 
+            is_accusing = is_accusing & (accused_idx != jnp.arange(num_agents)) # this resolves the self-accusation problem (agent cannot accuse himself)
+
+            # select the true metric relevant to each accuser's charge: 
+            true_metric_for_accused = jnp.where(
+                charges == 1, greed_true[accused_idx], # check to see if it is a greed charge, is agent actually greedy? 
+                jnp.where(charges==2, freeload_true[accused_idx], # if it is a freeload charge, check if that agent actually freeloaded
+                jnp.where(charges==3, lie_true[accused_idx], # if it is a lie charge, check if that agent actually lied
+                          jnp.zeros(num_agents, dtype=jnp.bool_))) # otherwise nothing
+            )
+
+            # Noisy audit signal: y = true_metric XOR Bernoulli(p_err) as per docs: 
+            audit_err = jax.random.bernoulli(k_audit_err, self.p_err, shape=(num_agents,))
+            audit_signal = jnp.logical_xor(true_metric_for_accused, audit_err)
+
+            # Reputation dynamics: 
+            # for now if the accused agent is found guilty then the target's reputation drops
+            # and if the accused agent is found innocent, then the accuser's reputation drops (this is a false accusation)
+            rep_delta = jnp.zeros((num_agents,), dtype=jnp.float32)
+
+            def guilty_delta(j):
+                guilty = is_accusing & audit_signal & (accused_idx == j)
+                return jnp.sum(jnp.where(guilty, -self.delta_rep, 0.0))
+            
+            rep_delta = rep_delta + jax.vmap(guilty_delta)(jnp.arange(num_agents))
+            rep_delta = rep_delta - jnp.where(is_accusing & ~audit_signal, self.delta_rep, 0.0) # reduce the accuser's reputation if false accusation
+
+            new_reputations = jnp.clip(state.reputations + rep_delta, 0.0, 1.0)
+
+            # Update last_comms for this step: 
+            new_last_comms = jnp.stack(
+                [claim_levels, accuse_targets, charges, recommends], axis=-1
+            ).astype(jnp.float32)
 
             # Reward function Update: Recall reward is: u_{t,i} = w_f*delta_e - w_h.I[e<=lambda_h] - w_c*I[r<=k] - w_p*[punish]
             delta_e = energy_new - energy_old
