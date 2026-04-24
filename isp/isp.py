@@ -746,11 +746,12 @@ class ISP(MultiAgentEnv):
                 agent_locs=new_locs,
                 river_level=R_new,
                 energy=energy_new,
-                reputations=state.reputations, # we haven't changed this yet...once adding audit logic then we will change reputations vector
+                reputations=new_reputations, # we haven't changed this yet...once adding audit logic then we will change reputations vector
                 cumulative_harvest=new_cumulative_harvest,
                 cumulative_invest=new_cumulative_invest,
                 num_steps_below_collapse=num_steps_below,
                 river_obs=river_obs_new,
+                last_comms=new_last_comms,
                 grid=new_grid,
                 inner_t = state.inner_t+1,
                 outer_t=state.outer_t,
