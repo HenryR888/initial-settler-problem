@@ -522,25 +522,30 @@ class ISP(MultiAgentEnv):
             # grids shape: (num_agents, OBS_SIZE, OBS_SIZE, num_classes)
 
             
-            def add_scalar_channels(grid,agent_idx):
-                '''
-                add river channel and energy channel to one-hot encoded vector, which we will later pass into CNN in IPPO...
-                !Note that here we just add the 2 channels as part of the whole channel, but CNN should learn to recognise these are constants thus ignore. 
-                When we add GRU with communication action, this will have to change
-                '''
-                # noisy river estimate for this agent: shape (OBS_SIZE, OBS_SIZE, 1)
+            def add_scalar_channels(grid, agent_idx):
+                # river channel for each agent: 
                 river_ch = jnp.full(
                     (self.OBS_SIZE, self.OBS_SIZE, 1),
-                    state.river_obs[agent_idx],
-                    dtype=jnp.float32,
+                    state.river_obs[agent_idx], dtype=jnp.float32,
                 )
-                # agent's own energy: shape (OBS_SIZE, OBS_SIZE, 1)
+                # energy channel for each agent: 
                 energy_ch = jnp.full(
                     (self.OBS_SIZE, self.OBS_SIZE, 1),
-                    state.energy[agent_idx],
-                    dtype=jnp.float32,
+                    state.energy[agent_idx], dtype=jnp.float32,
                 )
-                return jnp.concatenate([grid, river_ch, energy_ch], axis=-1)
+                # reputation channel for each agent's reputation: 
+                rep_chs = jnp.broadcast_to(
+                    state.reputations.reshape(1,1,num_agents),
+                    (self.OBS_SIZE, self.OBS_SIZE, num_agents),
+                )
+                # normalise the agents; last comm tuples to 1 for better optimisation: 
+                normed_comms = state.last_comms/self.COMM_NORM # (n,4)
+                # here we have an inbox which is global and made up of all the 4 parts of the comm vector that the agents will be able to perceive. 
+                inbox = jnp.broadcast_to(
+                    normed_comms.reshape(1,1,4*num_agents),
+                    (self.OBS_SIZE, self.OBS_SIZE, 4*num_agents),
+                )
+                return jnp.concatenate([grid, river_ch, energy_ch, rep_chs, inbox], axis=-1)
             
             grids = jax.vmap(add_scalar_channels, in_axes=(0,0)) (
                 grids.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
