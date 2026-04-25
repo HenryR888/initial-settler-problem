@@ -632,8 +632,9 @@ class ISP(MultiAgentEnv):
             harvesting = (env_actions == Actions.harvest) & on_river
             investing = (env_actions == Actions.invest) & on_river
             noop = (env_actions == Actions.stay)
-            punishing = env_actions >= 9 # Recall Punish(j) = 9 + j
             punish_target = jnp.clip(env_actions-9, 0, num_agents-1)
+            punishing = (env_actions>=9) & (punish_target !=jnp.arange(num_agents)) # prevent agent from punishing itself. 
+            
 
             # Update per agent energy levels: 
             energy_old = state.energy # vector with per agent energy levels
@@ -721,6 +722,8 @@ class ISP(MultiAgentEnv):
             # for now if the accused agent is found guilty then the target's reputation drops
             # and if the accused agent is found innocent, then the accuser's reputation drops (this is a false accusation)
             rep_delta = jnp.zeros((num_agents,), dtype=jnp.float32)
+
+            #!NOTE: we might want to consider adding a positive reputation delta for accusing correctly after first experiment run. The reason I opt for not doing it initially is because I want to mimic how socially one is not rewarded directly for making a correct accusation. But rather indirectly, by accusing and punishing correctly, the agent is punishing freeloaders, liers and greedy harvesters from the system which maintains the longevity and stability of the environmnet
 
             def guilty_delta(j):
                 guilty = is_accusing & audit_signal & (accused_idx == j)
@@ -826,7 +829,7 @@ class ISP(MultiAgentEnv):
                 agent_locs=agent_locs,
                 river_level=jnp.float32(1.0),
                 energy=jnp.full((num_agents,), 0.5, dtype=jnp.float32), # note that we initialise agents' energy level at 0.5...not starving, not full of energy either. 
-                reputations=jnp.zeros((num_agents,), dtype=jnp.float32),
+                reputations=jnp.full((num_agents,), 0.5, dtype=jnp.float32), # initialise agents' reputation at 0.5 each (neutral) so that reputation can move in either direction. 
                 cumulative_harvest=jnp.zeros((num_agents,), dtype=jnp.float32),
                 cumulative_invest=jnp.zeros((num_agents,),dtype=jnp.float32),
                 num_steps_below_collapse=jnp.int32(0),
