@@ -834,6 +834,7 @@ class ISP(MultiAgentEnv):
                 grid=grid,
                 inner_t=jnp.int32(0),
                 outer_t=jnp.int32(0),
+                last_comms=jnp.zeros((num_agents, 4), dtype=jnp.float32),
             )
         
         # Now we return both the observation and state for the initial state: 
@@ -857,19 +858,24 @@ class ISP(MultiAgentEnv):
     def num_actions(self) -> int: 
         return 9 + self.num_agents
     
-    def action_space(self, agent_id=None) -> Discrete:
-        """Action space is 9 base actions + 1 PUNISH(j) per agent (turn left/right, move in 4 directions an stay, harvest and invest)"""
-        return Discrete(9 + self.num_agents)
+    def action_space(self, agent_id=None):
+        return Tuple([
+            Discrete(9+self.num_agents), # environment actions
+            Discrete(self.K_claim_bins), # claim level of river health
+            Discrete(self.num_agents+1), # accuse target (0=nobody)
+            Discrete(4), # charge actions
+            Discrete(4), # recommend actions
+        ])
+        
     
     def observation_space(self):
         """
         Observation shape per agent: 
         - one-hot grid channels: len(Items)-1 + num_agents (= 2 + num_agents: wall, river, each agent)
-        - scalar channels: 2 (river_obs, energy)
-        Total channels = 4 + num_agents 
+        - scalar channels:  river_obs, energy, reputations (same as num_agents) and inbox which is (4 comm actions*num agents)
         """
         num_classes = len(Items) - 1 + self.num_agents
-        total_channels = num_classes + 2 # here we add 2 for the river_obs and energy
+        total_channels = num_classes + 2 + self.num_agents + 4*self.num_agents # channels are representative of river_obs, energy, reputations and inbox
         shape = (
             (self.OBS_SIZE, self.OBS_SIZE, total_channels)
             if self.cnn
@@ -915,8 +921,6 @@ class ISP(MultiAgentEnv):
         img = downsample(img, subdivs)
         self.title_cache[key] = img
         return img
-
-# TODO: last_claims, reputations (once communication logic is addedd), render method 
 
             
 
