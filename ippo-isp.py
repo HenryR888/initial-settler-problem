@@ -454,7 +454,7 @@ def make_train(config):
                         # pi_seq logits: (NUM_STEPS, MINIBATCH_SIZE, action_dim)
                         # value_seq: (NUM_STEPS, MINIBATCH_SIZE)
 
-                        log_prob = pi_seq.log_prob(traj_mb.action) # compute the log probs of the actions that were taken under current policy
+                        log_prob = sum(pi_seq[k].log_prob(traj_mb.action[...,k]) for k in range(len(pi_seq))) # compute the log probs of the actions for each of the action heads that were taken under current policy
 
                         # value clip function: V_old + clip(V_new - V_old, -eps, eps)
                         value_pred_clipped = traj_mb.value + (
@@ -474,7 +474,7 @@ def make_train(config):
                         loss_actor = -jnp.minimum(loss_actor1, loss_actor2).mean() # final PPO surrogate clip objective function...we want to maximise the objective function, which means minimising the loss. 
 
                         # measure entropy of policy (higher value indicates more exporation, while lower value indicates more deterministic)
-                        entropy = pi_seq.entropy().mean()
+                        entropy = sum(pi_seq[k].entropy() for k in range(len(pi_seq))).mean()
                         total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"]*entropy # we include the value_loss here to train the critic network in parallel, which should make advantage calculations more accurate, and thus policy updates better. We subtract the entropy term to encourage the policy to continue exploring. 
                         return total_loss, (value_loss, loss_actor, entropy) # we use the total_loss for backprop, and the vector shall be used for diagnostics
 
@@ -496,7 +496,7 @@ def make_train(config):
                 permutation = jax.random.permutation(_rng, config["NUM_ACTORS"])
 
                 # now we build the update batch from traj_batch fieldds (note that we exclude info, which has incompatible shape)
-                # all these fields below have shape (NUM_STEPS, NUM_ACTORS, ...)
+                # all these fields below have shape (NUM_STEPS, NUM_ACTORS, ...) traj_batch.action has shape (NUM_STEPS, NUM_ACTORS, 5)
                 fields_for_update = (
                     traj_batch.done,
                     traj_batch.action, 
