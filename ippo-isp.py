@@ -295,9 +295,11 @@ def make_train(config):
         Here we perform the entire training run.
         '''
         # INIT NETWORK
-        network = ActorCriticGRU(env.action_space().n, 
-                                 hidden_dim=config["GRU_HIDDEN_DIM"],
-                                 activation=config["ACTIVATION"],
+        action_dims = [s.n for s in env.action_space().spaces]
+        network = ActorCriticGRU(
+                                action_dims=action_dims, 
+                                hidden_dim=config["GRU_HIDDEN_DIM"],
+                                activation=config["ACTIVATION"],
         )
 
         rng, _rng = jax.random.split(rng)
@@ -348,11 +350,13 @@ def make_train(config):
                 rng, _rng = jax.random.split(rng)
                 obs_batch = jnp.transpose(last_obs, (1,0,2,3,4)).reshape(-1, *env.observation_space()[1]) # transpose and flatten to obtain batch of actor observations
 
-                new_hstate, pi, value = network.apply(train_state.params, hstate, obs_batch, last_done) # run the actor/critic GRU network 
-                action = pi.sample(seed=_rng) # sample an action from that pi that was outputted, and then compute log_prob
-                log_prob = pi.log_prob(action)
-                env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
-                env_act = [v.squeeze(-1) for v in env_act.values()] # squeeze trailing dim: (NUM_ENVS, 1) -> (NUM_ENVS,)
+                new_hstate, pis, value = network.apply(train_state.params, hstate, obs_batch, last_done)
+                sample_keys = jax.random.split(_rng, len(pis)) # create 5 independent random keys for different action heads to sample independently
+                action = jnp.stack( # sample actions from the 5 different heads:
+                    [pi.sample(seed=k) for pi, k in zip(pis, sample_keys)], axis=-1
+                ) # (NUM_ACTORS, 5)
+                log_prob = sum(pis[k].log_prob(action[:, k]) for k in range(len(pis))) # (NUM_ACTORS,) (we are assuming that there is theoretical independence between 5 action heads, which if we did not the combinatorics would become too compute-heavy)
+                env_act = action.reshape(env.num_agents, config["NUM_ENVS"], 5).transpose(1,0,2) # (NUM_ENVS, num_agents, 5)
 
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"]) 
