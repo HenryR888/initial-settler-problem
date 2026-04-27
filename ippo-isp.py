@@ -105,7 +105,7 @@ class CNN(nn.Module):
 
 
 class ActorCriticGRU(nn.Module):
-    action_dim: int
+    action_dims: Sequence[int] # [env_act_n, claim_n, accuse_n, charge_n, recommendation_n]
     hidden_dim: int = 128
     activation: str = "relu"
     dtype: Any = jnp.bfloat16
@@ -130,17 +130,22 @@ class ActorCriticGRU(nn.Module):
         new_hstate, gru_out = nn.GRUCell(features=self.hidden_dim)(hstate, embedding)
 
         # then we take the GRU output (the updated memory) and we pass it into the actor nework (which has 64 dimensions)
-        actor_mean = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), # we orthogonalise using sqrt(2) since this is a common PPO technique which stabilises training, also initial bias vector is just all zeros
+        actor_hidden = nn.Dense(
+            64, kernel_init=orthogonal(np.qrt(2)), bias_init=constant(0.0),
             dtype=self.dtype, param_dtype=jnp.float32,
         )(gru_out)
-        actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense( # now we map the 64-dim actor feature vectors to logits
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0),
-            dtype=self.dtype, param_dtype=jnp.float32,
-        )(actor_mean)
-        pi = distrax.Categorical(logits=actor_mean.astype(jnp.float32)) # now we take the logits and convert them to an actor categorical-distribution
-
+        actor_hidden = activation(actor_hidden)
+        
+        # here we have one categorical head per action component. Effectively, we have 5 action heads, each outputting logits which shall be converted to probability distribution using softmax, for each of the 5 different action types from which an action shall be sampled: 
+        pis = [
+            distrax.Categorical(logits=nn.Dense(
+                dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0),
+                dtype=self.dtype, param_dtype=jnp.float32,
+                name=f"actor_head_{k}",
+            )(actor_hidden).astype(jnp.float32))
+            for k, dim in enumerate(self.action_dims)
+        ]
+        
         # critic head of network: 
         critic = nn.Dense( # once again take GRU output and map it to 64 dimensional vector
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
@@ -152,7 +157,7 @@ class ActorCriticGRU(nn.Module):
             dtype=self.dtype, param_dtype=jnp.float32,
         )(critic)
 
-        return new_hstate, pi, jnp.squeeze(critic.astype(jnp.float32), axis=-1) # output is new hidden state, policy over all actions, critic value estimate
+        return new_hstate, pis, jnp.squeeze(critic.astype(jnp.float32), axis=-1) # output is new hidden state, policy over all actions, critic value estimate
         
 
 # NamedTuple allows for python to call objects like t.action or t.state, instead of indexing like t[0], t[1]...
