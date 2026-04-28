@@ -40,6 +40,7 @@ class LogEnvState:
     returned_river_level: float # scalar value
     returned_mean_energy: float # scalar value (mean across all agents)
     returned_collapse_rate: float # scalar value
+    returned_mean_reputation: float 
 
 
 class LogWrapper(JaxMARLWrapper):
@@ -71,6 +72,7 @@ class LogWrapper(JaxMARLWrapper):
             returned_river_level=jnp.zeros(()),
             returned_mean_energy=jnp.zeros(()),
             returned_collapse_rate=jnp.zeros(()),
+            returned_mean_reputation=jnp.zeros(()),
         )
         return obs, state
     
@@ -110,6 +112,7 @@ class LogWrapper(JaxMARLWrapper):
             returned_river_level=state.returned_river_level * (1-ep_done) + info["river_level"] * ep_done,
             returned_mean_energy=state.returned_mean_energy * (1-ep_done) + info["energy"].mean() * ep_done,
             returned_collapse_rate=state.returned_collapse_rate * (1-ep_done) + info["collapse"].astype(jnp.float32) * ep_done,
+            returned_mean_reputation=state.returned_mean_reputation*(1-ep_done) + info["reputations"].mean() * ep_done
         )
 
         if self.replace_info:
@@ -124,5 +127,6 @@ class LogWrapper(JaxMARLWrapper):
         info["returned_mean_energy"] = state.returned_mean_energy
         info["returned_collapse_rate"] = state.returned_collapse_rate
         info["returned_episode"] = jnp.full((self._env.num_agents,), ep_done)
+        info["returned_mean_reputation"] = state.returned_mean_reputation
 
         return obs, state, reward, done, info

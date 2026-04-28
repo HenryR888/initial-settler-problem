@@ -797,6 +797,7 @@ class ISP(MultiAgentEnv):
                 "river_level": R_new,
                 "energy": energy_new,
                 "collapse": collapse_done,
+                "reputations": new_reputations,
             }
 
             return obs, state, rewards, done, info

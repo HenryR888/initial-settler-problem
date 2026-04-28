@@ -26,7 +26,7 @@ CONFIG = {
     "LR": 0.0003,
     "GRU_HIDDEN_DIM": 128, # dimension for h_t for GRU
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
-    "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing policy update 
+    "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing PPO update
     "TOTAL_TIMESTEPS": 5e6, # total number of time steps before training ends (!NOTE DEMO RUN IS 5e6 timesteps...default is 1e8)
     "UPDATE_EPOCHS": 2, # number of times we iterate over the rollot data before collecting new data 
     "NUM_MINIBATCHES": 8, # here within the CNN GRU, we have 8 minibatches of 24 sequences each...with the reason being that we need it to divide NUM_ACTORS = NUM_ENVS * num_agents = 64*3=192, since PPO needs to split data according to sequence 
@@ -40,7 +40,7 @@ CONFIG = {
     "ENV_NAME": "isp",
     "ENV_KWARGS": { #KWARGS stands for keywords as arguments, which allow us to unpack the dictionary as parameters within our clean_up function later on
         "num_agents" : 3,
-        "num_inner_steps" : 500, # num of steps before environment resets
+        "num_inner_steps" : 500, # num of steps before environment resets (i.e. how long does episode last before hitting terminal state)
     },
     "ANNEAL_LR": False, # NOTE: switch to True if you want learning rate to decay linearly over training
     "GIF_NUM_FRAMES": 250, # length of evaluation for GIF evaluation...this is only for visualising post-training
@@ -48,7 +48,7 @@ CONFIG = {
     "ENTITY": "henryrochester8-university-of-cape-town",
     "PROJECT": "isp",
     "WANDB_MODE" : "online", # NOTE: for dev, set to offline
-    "WANDB_TAGS": ["3-agents", "ippo-gru"],
+    "WANDB_TAGS": ["3-agents", "ippo-gru, multidiscrete-actions"],
 }
 
 class CNN(nn.Module):
@@ -592,6 +592,37 @@ def make_train(config):
             metric["mean_energy"] = metric.pop("returned_mean_energy").mean()
             metric["collapse_rate"] = metric.pop("returned_collapse_rate").mean()
 
+            # reputation metric: 
+            metric["mean_reputation"] = metric.pop("returned_mean_reputation").mean()
+
+            # communication metrics from traj_batch.action which has shape (NUM_STEPS, NUM_ACTORS, 5)
+            # we reshape to separate the agents from the environments, because we want to keep agent-level identity to determine who is making which claims: (NUM_STEPS, num_agents, NUM_ENVS, 5)
+            comm = traj_batch.action.reshape(config["NUM_STEPS"], num_agents, config["NUM_ENVS"], 5)
+
+            # claim level metric: 
+            claim_levels = comm[:,:,:,1] # (NUM_STEPS, num_agents, NUM_ENVS)
+            for agent_id in range(num_agents): # because our num_agents is relatively small, and this for loop is unrolled at trace time, the computational complexity should be negligble
+                metric[f"agent_{agent_id}_mean_claim"] = claim_levels[:, agent_id, :].mean()
+            metric["mean_claim_level"] = claim_levels.mean()
+
+            # accusation metric: 
+            accuse_targets = traj_batch.action[:,:,2]
+            metric["accusation_rate"] = (accuse_targets>0).astype(jnp.float32).mean()
+
+            # charge metrics: 
+            charges = traj_batch.action[:,:,3]
+            metric["charge_rate_greedy"] = (charges==1).astype(jnp.float32).mean()
+            metric["charge_rate_freeload"] = (charges==2).astype(jnp.float32).mean()
+            metric["charge_rate_lie"] = (charges==3).astype(jnp.float32).mean()
+
+            # recommendation metrics: 
+            recommends = traj_batch.action[:,:,4]
+            metric["rec_rate_harvest_less"] = (recommends==1).astype(jnp.float32).mean()
+            metric["rec_rate_harvest_more"] = (recommends==2).astype(jnp.float32).mean()
+            metric["rec_rate_invest_more"] = (recommends==3).astype(jnp.float32).mean()
+
+
+
             metric = jax.tree_map(lambda x: x.mean(), metric) # then we have one clean dictionary of metrics to gather info about rollout data
 
             jax.debug.callback(callback, metric)
@@ -619,7 +650,7 @@ def single_run(config):
         tags=config["WANDB_TAGS"],
         config=config,
         mode=config["WANDB_MODE"],
-        name=f'ippo_gru_isp',
+        name=f'ippo_gru_isp_multidiscrete',
     )
 
     rng = jax.random.PRNGKey(config["SEED"])
