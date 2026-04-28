@@ -131,7 +131,7 @@ class ActorCriticGRU(nn.Module):
 
         # then we take the GRU output (the updated memory) and we pass it into the actor nework (which has 64 dimensions)
         actor_hidden = nn.Dense(
-            64, kernel_init=orthogonal(np.qrt(2)), bias_init=constant(0.0),
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
             dtype=self.dtype, param_dtype=jnp.float32,
         )(gru_out)
         actor_hidden = activation(actor_hidden)
