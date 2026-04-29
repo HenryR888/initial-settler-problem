@@ -178,7 +178,7 @@ class ISP(MultiAgentEnv):
             gamma_v=0.3, # river health increase per invest (for I_t in regen function)
             g = -0.05, # NoOp energy gain for agent not doing anything at that specific number step
             K_collapse_thresh = 0.1, # river health level collapse threshold (after k steps below threshold, episode transitions into terminal state)
-            k_collapse_steps = 15, # number of steps below K before episode collapses (boosted to 15 to allow agents more time before river collapses during early training)
+            k_collapse_steps = 15, # number of steps below K before episode collapses (boosted to 15 to allow agents more time before river collapses during early training) (CHANGED FROM 5)
             sigma_noise = 0.05, # standard deviation for Normal distribution for noise
             #reward function hyperparams:
             w_f=1.0, # weight for delta energy
