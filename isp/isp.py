@@ -176,7 +176,7 @@ class ISP(MultiAgentEnv):
             gamma_h=0.1, # river damage per harvest action for (D_t,i in regen function)
             beta_v = 0.2, # energy loss per invest action
             gamma_v=0.3, # river health increase per invest (for I_t in regen function)
-            g = 0.05, # NoOp energy gain for agent not doing anything at that specific number step
+            g = -0.05, # NoOp energy gain for agent not doing anything at that specific number step
             K_collapse_thresh = 0.1, # river health level collapse threshold (after k steps below threshold, episode transitions into terminal state)
             k_collapse_steps = 5, # number of steps below K before episode collapses
             sigma_noise = 0.05, # standard deviation for Normal distribution for noise
@@ -654,14 +654,14 @@ class ISP(MultiAgentEnv):
             
             energy_new = jnp.clip(energy_old + energy_delta, 0.0, 1.0) 
 
-            # River Dynamics Update: recall R_{t+1} = clip(R_t + alpha.R_t(1-R_t) - D_t = I_t + eps_t, 0, 1)
+            # River Dynamics Update: recall R_{t+1} = clip(R_t - D_t + I_t + eps_t, 0, 1)
             D_t = jnp.sum(jnp.where(harvesting, self.gamma_h, 0.0)) # damage to be subtracted from river health from agents harvesting
             I_t = jnp.sum(jnp.where(investing, self.gamma_v, 0.0)) # health boost to be added back to river from agents investing 
             eps_t = jax.random.normal(k_river_noise)* self.sigma_noise # eps_t ~ N(0, sigma^2)
 
             R_t = state.river_level
-            R_new = jnp.clip( # update river level according to logistic regeneration process above
-                R_t + self.alpha*R_t*(1.0-R_t) - D_t + I_t + eps_t, 
+            R_new = jnp.clip( # update river level according to behaviourial-dependent ecology process above
+                R_t - D_t + I_t + eps_t, 
                 0.0, 1.0
             )
 
