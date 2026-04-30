@@ -15,6 +15,7 @@ print("energy:", state.energy)
 print("reputations:", state.reputations)
 print("last_comms:", state.last_comms) # expect (3,4) zeros
 
+
 # action set array is as follows: 
 # INDEX 0: env_action: possible values are 0-11: 0=turn_left, 1=turn_right, 2=left, 3=right,4=up, 5=down, 6=stay, 7=harvest, 8=invest, 9=punish(0) (i.e. punish agent whose index is 0...and then if the agent's own index is 0, say, then this will be handled in isp.py, since agent cannot punish itself), 10 = punish(1), 11=punish(2)
 # INDEX 1: claim_level: possible values are 0-4: 0 = very low [0,0.2); 1 = low [0.2,0.4); 2 = medium [0.4,0.6); 3 = high [0.6,0.8); 4 = very high [0.8,1]
@@ -36,6 +37,7 @@ print("river_level:", state.river_level)
 print("energy:", state.energy)
 print("reputations:", state.reputations)
 print("last_comms:", state.last_comms)
+print("rewards", rewards)
 
 # step with harvest action, claim very high river level and no accusation, no charge and no recommendation: 
 key, subkey = jax.random.split(key)
@@ -50,6 +52,7 @@ print("energy:", state.energy)
 print("cumulative_harvest:", state.cumulative_harvest)
 print("reputations:", state.reputations)
 print("last_comms:", state.last_comms)
+print("rewards", rewards)
 
 # step with one of the agents accusing agent 1 of greed and recommending to harvest less: 
 key, subkey = jax.random.split(key)
@@ -62,6 +65,7 @@ obs, state, rewards, done, info = env.step_env(subkey, state, actions)
 print("\nAfter accusation step (agent 0 accuses agent 1 of greed):")
 print("reputations:", state.reputations) # agent 1 rep should change
 print("last_comms:", state.last_comms)
+print("rewards", rewards)
 
 # self accusation guard test: agent 0 accuses itself, which should be ignored: 
 
@@ -76,6 +80,7 @@ obs, state, rewards, done, info = env.step_env(subkey, state, actions)
 print("\nAfter self-accusation step (should be ignored):")
 print("rep before:", rep_before)
 print("rep after: ", state.reputations) # agent 0 reputation should be unchanged
+print("rewards", rewards)
 
 # force a greedy state for agent 1 and test the accusation is justified: 
 # we expect that agent 1 reputation should drop, and agent 0 reputation should remain unchanged
@@ -90,5 +95,11 @@ actions = jnp.array([
 ])
 _, state_greedy, _,_,_ = env.step_env(subkey, state_greedy, actions)
 print("reputations after justified accusation:", state_greedy.reputations)
+print("rewards", rewards)
 
+
+# check that the energy value cna go negative: 
+state_low = state.replace(energy=jnp.array([0.02, 0.02, 0.02]))
+obs, state_low, rewards, done, info = env.step_env(subkey, state_low, jnp.array([[6,0,0,0,0]]*3))
+print("energy after NOOP from near-zero:", state_low.energy)  # should be -0.03, not clipped to 0
 
