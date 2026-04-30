@@ -652,7 +652,7 @@ class ISP(MultiAgentEnv):
                 )
             energy_delta = energy_delta - jax.vmap(punishment_received)(jnp.arange(num_agents)) # update energy levels of each agent by taking delta_energy_self and subtracting energy loss from receiving punishment per agent
             
-            energy_new = jnp.clip(energy_old + energy_delta, 0.0, 1.0) 
+            energy_new = energy_old + energy_delta # here we removed the clipped energy, and leave it uncapped
 
             # River Dynamics Update: recall R_{t+1} = clip(R_t - D_t + I_t + eps_t, 0, 1)
             D_t = jnp.sum(jnp.where(harvesting, self.gamma_h, 0.0)) # damage to be subtracted from river health from agents harvesting
@@ -740,11 +740,12 @@ class ISP(MultiAgentEnv):
             ).astype(jnp.float32)
 
             # Reward function Update: Recall reward is: u_{t,i} = w_f*delta_e - w_h.I[e<=lambda_h] - w_c*I[r<=k] - w_p*[punish]
-            delta_e = energy_new - energy_old
-            hunger_penalty = jnp.where(energy_new <= self.lambda_h, self.w_h, 0.0)
-            collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
-            punish_penalty = jnp.where(punishing, self.w_p, 0.0)
-            rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
+            #delta_e = energy_new - energy_old
+            #hunger_penalty = jnp.where(energy_new <= self.lambda_h, self.w_h, 0.0)
+            #collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
+            #punish_penalty = jnp.where(punishing, self.w_p, 0.0)
+            # rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
+            rewards = harvesting.astype(jnp.float32)
 
             # update the grid with river tiles and place agents on their new respective tiles: 
             new_grid = state.grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river))
