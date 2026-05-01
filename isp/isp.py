@@ -745,7 +745,7 @@ class ISP(MultiAgentEnv):
             #collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
             #punish_penalty = jnp.where(punishing, self.w_p, 0.0)
             # rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
-            rewards = harvesting.astype(jnp.float32)
+            rewards = harvesting.astype(jnp.float32) * R_new # update reward to depend on the level of the river. 
 
             # update the grid with river tiles and place agents on their new respective tiles: 
             new_grid = state.grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river))
