@@ -40,6 +40,7 @@ class State:
     inner_t: int # current timestep within episode
     outer_t: int # current episode index number
     last_comms: jnp.ndarray # (n,4)...this is our last_comm tuple per agent, which is the [claim_level, accuse_target, charge, recommend]
+    tile_richness: jnp.ndarray # (num_river_tiles, ) richness of each river tile, which is resampled each episode
 
     # ! still need to add last_claims, which will be a vector which keeps track of last claim made by agents for the Lie metric...I will come back to this once adding communication action !
 
@@ -523,6 +524,10 @@ class ISP(MultiAgentEnv):
 
             
             def add_scalar_channels(grid, agent_idx):
+                # get the tile_richness for each tile here
+                def get_tile_richness(loc):
+                    matches = jnp.all(self.RIVER == loc[:2], axis=-1)                                                                                                                                
+                    return jnp.where(jnp.any(matches), state.tile_richness[jnp.argmax(matches)], 1.0) # we return 1.0 for neural if the agent is not standing on a river tile. 
                 # river channel for each agent: 
                 river_ch = jnp.full(
                     (self.OBS_SIZE, self.OBS_SIZE, 1),
@@ -545,7 +550,12 @@ class ISP(MultiAgentEnv):
                     normed_comms.reshape(1,1,4*num_agents),
                     (self.OBS_SIZE, self.OBS_SIZE, 4*num_agents),
                 )
-                return jnp.concatenate([grid, river_ch, energy_ch, rep_chs, inbox], axis=-1)
+                # richness channel for the richness of the tile: 
+                richness_ch = jnp.full(
+                    (self.OBS_SIZE, self.OBS_SIZE, 1),
+                    get_tile_richness(state.agent_locs[agent_idx]), dtype=jnp.float32,
+                )
+                return jnp.concatenate([grid, river_ch, energy_ch, rep_chs, richness_ch, inbox], axis=-1)
             
             grids = jax.vmap(add_scalar_channels, in_axes=(0,0)) (
                 grids.astype(jnp.float32), jnp.arange(num_agents) # cast grid to float 32, since it is int8
@@ -739,13 +749,19 @@ class ISP(MultiAgentEnv):
                 [claim_levels, accuse_targets, charges, recommends], axis=-1
             ).astype(jnp.float32)
 
+            # here we get the richness of each river tile:
+            def get_tile_richness(loc): 
+                matches = jnp.all(self.RIVER == loc[:2], axis=-1) # (num_river_tiles,)
+                return jnp.where(jnp.any(matches), state.tile_richness[jnp.argmax(matches)], 1.0)
+            agent_tile_richness = jax.vmap(get_tile_richness)(new_locs) #(num_agents,)
+
             # Reward function Update: Recall reward is: u_{t,i} = w_f*delta_e - w_h.I[e<=lambda_h] - w_c*I[r<=k] - w_p*[punish]
             #delta_e = energy_new - energy_old
             #hunger_penalty = jnp.where(energy_new <= self.lambda_h, self.w_h, 0.0)
             #collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
             #punish_penalty = jnp.where(punishing, self.w_p, 0.0)
             # rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
-            rewards = harvesting.astype(jnp.float32) * R_new # update reward to depend on the level of the river. 
+            rewards = harvesting.astype(jnp.float32) * R_new * agent_tile_richness # update reward to depend on the level of the river and tile richness in order to provoke communication
 
             # update the grid with river tiles and place agents on their new respective tiles: 
             new_grid = state.grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river))
@@ -764,6 +780,7 @@ class ISP(MultiAgentEnv):
                 grid=new_grid,
                 inner_t = state.inner_t+1,
                 outer_t=state.outer_t,
+                tile_richness=state.tile_richness,
             )
 
             # episode reset logic:
@@ -807,7 +824,7 @@ class ISP(MultiAgentEnv):
         def _reset_state(
                 key: jnp.ndarray
         ) -> State:
-            key, k_agents, k_dirs, k_obs = jax.random.split(key, 4) # splitting up the sources of randomness to avoid correlation...one source of randomness for agent spawn position; another for direction and observation
+            key, k_agents, k_dirs, k_obs, k_rich = jax.random.split(key, 5) # splitting up the sources of randomness to avoid correlation...one source of randomness for agent spawn position; another for direction and observation, and another for the tile richness
 
             agent_pos = jax.random.permutation(k_agents, self.SPAWNS_PLAYERS)[:num_agents] # we randomly asign the agent' starting positions
             agent_dirs = jax.random.randint( # randomly assign direction that agent faces ( up, down, left, right...that is why maxval = 4)
@@ -840,6 +857,7 @@ class ISP(MultiAgentEnv):
                 inner_t=jnp.int32(0),
                 outer_t=jnp.int32(0),
                 last_comms=jnp.zeros((num_agents, 4), dtype=jnp.float32),
+                tile_richness=jax.random.uniform(k_rich, shape=(len(self.RIVER),), minval=0.5, maxval=1.5)
             )
         
         # Now we return both the observation and state for the initial state: 
@@ -880,7 +898,7 @@ class ISP(MultiAgentEnv):
         - scalar channels:  river_obs, energy, reputations (same as num_agents) and inbox which is (4 comm actions*num agents)
         """
         num_classes = len(Items) - 1 + self.num_agents
-        total_channels = num_classes + 2 + self.num_agents + 4*self.num_agents # channels are representative of river_obs, energy, reputations and inbox
+        total_channels = num_classes + 3 + self.num_agents + 4*self.num_agents # channels are representative of river_obs, energy, reputations and inbox and richness channel
         shape = (
             (self.OBS_SIZE, self.OBS_SIZE, total_channels)
             if self.cnn
