@@ -103,3 +103,23 @@ state_low = state.replace(energy=jnp.array([0.02, 0.02, 0.02]))
 obs, state_low, rewards, done, info = env.step_env(subkey, state_low, jnp.array([[6,0,0,0,0]]*3))
 print("energy after NOOP from near-zero:", state_low.energy)  # should be -0.03, not clipped to 0
 
+
+# verify that tile_richness is initialised correctly: 
+
+print("tile_richness:", state.tile_richness)
+print("num river tiles:", len(env.RIVER))
+
+# check to see that richness is within the observation channel: 
+print("obs shape:", obs.shape) # should be 23 not 22, after adding the extra channel
+
+# check that the reward scales with the richness of the river: 
+
+river_loc = jnp.array([env.RIVER[0, 0], env.RIVER[0, 1], 0], dtype=jnp.int16)                                                                                                            
+state_on_river = state.replace(                                                                                                                                                          
+    agent_locs=state.agent_locs.at[0].set(river_loc)                                                                                                                                     
+)
+actions = jnp.array([[7,0,0,0,0], [6,0,0,0,0], [6,0,0,0,0]])                                                                                                                             
+obs, state_on_river, rewards, done, info = env.step_env(subkey, state_on_river, actions)
+print("rewards:", rewards)                                                                                            
+print("tile_richness[0]:", state.tile_richness[0])  
+
