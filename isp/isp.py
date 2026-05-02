@@ -191,7 +191,7 @@ class ISP(MultiAgentEnv):
             c_pun=0.08, # energy cost for agent to punish someone else
             c_rec=0.16, # energy cost for agent who is receiving punishment
             jit = True,
-            obs_size=11, # each agent has fov of 11x11 tiles within grid
+            obs_size=5, # each agent has fov of 5x5 grid within tiles to rely on comms
             cnn=True,
             agent_ids=False,
             # This is a 15x9 gridworld which we have proposed, on the basis that we will use 3 agents to start out. There are walls on the left and right and bottom of the environment to prevent the agents walking out. 
@@ -571,7 +571,7 @@ class ISP(MultiAgentEnv):
 
             # split the keys upfront so the different noise sources are independent...river noise needs to be independent from observation noise, so agents do not infer true river state from noise structure
             # Moreover, we do not want collision key to be correlated with river noise or obs noise, otherwise agents could use collision dynamics to infer state of river/observation of other agents. Also add audit key for communcation audit signal error
-            key, k_river_noise, k_obs_noise, k_collision, k_audit_err = jax.random.split(key, 5)
+            key, k_river_noise, k_obs_noise, k_collision, k_audit_err, k_spawn = jax.random.split(key, 6)
 
             actions = jnp.array(actions) # shape (num_agents, 5)
             env_actions = actions[:,0] # move/harvest/invest/punish
@@ -743,6 +743,28 @@ class ISP(MultiAgentEnv):
             rep_delta = rep_delta - jnp.where(is_accusing & ~audit_signal, self.delta_rep, 0.0) # reduce the accuser's reputation if false accusation
 
             new_reputations = jnp.clip(state.reputations + rep_delta, 0.0, 1.0)
+
+            # RESPAWN Conditions, recall that for ISP 5.0, we want the agents to respawn when they are punished, if their energy hits 0 and if the agent is found guilty. 
+            received_punishment = jax.vmap(
+                lambda j: jnp.any(punishing & (punish_target == j))
+            )(jnp.arange(num_agents))
+
+            found_guilty = jax.vmap(
+                lambda j: jnp.any(is_accusing & audit_signal & (accused_idx == j))
+            )(jnp.arange(num_agents))
+
+            starved = energy_new <=0
+
+            respawn = received_punishment | found_guilty | starved
+
+            # now we choose a random spawn tile for each agent (only if respawn is TRUE): 
+            random_spawn_idxs = jax.random.randint(k_spawn, shape=(num_agents,), minval=0, maxval=len(self.SPAWNS_PLAYERS))
+            random_spawn_locs = self.SPAWNS_PLAYERS[random_spawn_idxs]
+            spawn_locs = jnp.concatenate([random_spawn_locs, jnp.zeros((num_agents, 1), dtype=jnp.int16)], axis=-1)
+
+            new_locs = jnp.where(respawn[:, None], spawn_locs, new_locs)
+            energy_new = jnp.where(respawn, 0.5, energy_new)
+
 
             # Update last_comms for this step: 
             new_last_comms = jnp.stack(
