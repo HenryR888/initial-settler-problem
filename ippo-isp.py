@@ -605,12 +605,12 @@ def make_train(config):
             del metric["respawn_punish"], metric["respawn_starved"], metric["respawn_guilty"]
 
             # energy gini coefficient: 
-            mean_energy = metric["mean_energy"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
+            mean_energy = metric["energy"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
             for agent_id in range(num_agents):
                 metric[f"agent_{agent_id}_energy"] = mean_energy[..., agent_id].mean()
             agent_energy_means = jnp.array([mean_energy[..., i].mean() for i in range(num_agents)])
             metric["energy_gini"] = gini_coefficient(agent_energy_means)
-            del metric["mean_energy"]
+            del metric["energy"]
 
             # average harvest tile richness: 
             richness_h = metric["tile_richness_harvested"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
