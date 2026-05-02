@@ -841,8 +841,7 @@ class ISP(MultiAgentEnv):
                 "respawn_punish": received_punishment.astype(jnp.float32), # this shows how often agents are being punished off tiles
                 "respawn_starved": starved.astype(jnp.float32), # how often do agents starve? 
                 "respawn_guilty": found_guilty.astype(jnp.float32), # how often guilty verdicts are reached? 
-                "tile_richness_harvested": jnp.where(harvesting, agent_tile_richness, 0.0), # average richness of tiles being harvested (this will tell us if the agents are actually finding the rich tiles.)
-                
+                "tile_richness_harvested": jnp.where(harvesting, agent_tile_richness, 0.0), # average richness of tiles being harvested (this will tell us if the agents are actually finding the rich tiles.) 
             }
 
             return obs, state, rewards, done, info

@@ -595,6 +595,29 @@ def make_train(config):
             # reputation metric: 
             metric["mean_reputation"] = metric.pop("returned_mean_reputation").mean()
 
+            # respawn rate metrics: 
+            respawn_punish = metric["respawn_punish"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
+            respawn_starved = metric["respawn_starved"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
+            respawn_guilty = metric["respawn_guilty"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
+            metric["respawn_rate_punish"] = respawn_punish.mean()
+            metric["respawn_rate_starved"] = respawn_starved.mean()
+            metric["respawn_rate_guilty"] = respawn_guilty.mean()
+            del metric["respawn_punish"], metric["respawn_starved"], metric["respawn_guilty"]
+
+            # energy gini coefficient: 
+            mean_energy = metric["mean_energy"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
+            for agent_id in range(num_agents):
+                metric[f"agent_{agent_id}_energy"] = mean_energy[..., agent_id].mean()
+            agent_energy_means = jnp.array([mean_energy[..., i].mean() for i in range(num_agents)])
+            metric["energy_gini"] = gini_coefficient(agent_energy_means)
+            del metric["mean_energy"]
+
+            # average harvest tile richness: 
+            richness_h = metric["tile_richness_harvested"].reshape(config["NUM_STEPS"], config["NUM_ENVS"], num_agents)
+            harvesting_mask = richness_h > 0
+            metric["mean_richness_harvested"] = jnp.sum(richness_h) / (harvesting_mask.sum() + 1e-8)
+            del metric["tile_richness_harvested"]
+
             # communication metrics from traj_batch.action which has shape (NUM_STEPS, NUM_ACTORS, 5)
             # we reshape to separate the agents from the environments, because we want to keep agent-level identity to determine who is making which claims: (NUM_STEPS, num_agents, NUM_ENVS, 5)
             comm = traj_batch.action.reshape(config["NUM_STEPS"], num_agents, config["NUM_ENVS"], 5)
