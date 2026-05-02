@@ -759,11 +759,11 @@ class ISP(MultiAgentEnv):
 
             # now we choose a random spawn tile for each agent (only if respawn is TRUE): 
             random_spawn_idxs = jax.random.randint(k_spawn, shape=(num_agents,), minval=0, maxval=len(self.SPAWNS_PLAYERS))
-            random_spawn_locs = self.SPAWNS_PLAYERS[random_spawn_idxs]
+            random_spawn_locs = self.SPAWNS_PLAYERS[random_spawn_idxs].astype(jnp.int16)
             spawn_locs = jnp.concatenate([random_spawn_locs, jnp.zeros((num_agents, 1), dtype=jnp.int16)], axis=-1)
 
             new_locs = jnp.where(respawn[:, None], spawn_locs, new_locs)
-            energy_new = jnp.where(respawn, 0.5, energy_new)
+            energy_new = jnp.where(starved, 0.5, energy_new)
 
 
             # Update last_comms for this step: 
@@ -838,6 +838,11 @@ class ISP(MultiAgentEnv):
                 "energy": energy_new,
                 "collapse": collapse_done,
                 "reputations": new_reputations,
+                "respawn_punish": received_punishment.astype(jnp.float32), # this shows how often agents are being punished off tiles
+                "respawn_starved": starved.astype(jnp.float32), # how often do agents starve? 
+                "respawn_guilty": found_guilty.astype(jnp.float32), # how often guilty verdicts are reached? 
+                "tile_richness_harvested": jnp.where(harvesting, agent_tile_richness, 0.0), # average richness of tiles being harvested (this will tell us if the agents are actually finding the rich tiles.)
+                
             }
 
             return obs, state, rewards, done, info

@@ -123,3 +123,35 @@ obs, state_on_river, rewards, done, info = env.step_env(subkey, state_on_river, 
 print("rewards:", rewards)                                                                                            
 print("tile_richness[0]:", state.tile_richness[0])  
 
+
+
+# punish respawn test: 
+# we place agent 0 on the river, and agent 1 punishes agent...expect agent 0 to spawn on spawn tile
+
+river_loc = jnp.array([env.RIVER[0,0], env.RIVER[0,1], 0], dtype=jnp.int16)
+state_test = state.replace(agent_locs=state.agent_locs.at[0].set(river_loc))
+actions = jnp.array([[6,0,0,0,0], [9,0,0,0,0], [6,0,0,0,0]])
+obs, state_test, rewards, done, info = env.step_env(subkey, state_test, actions)
+print("agent 0 loc after being punished:", state_test.agent_locs[0])
+
+
+# starvation respawn test: 
+# we set the agent's energy near to 0, and have him do a NoOp, then drain the energy of agent to below 0 , and should have him respawn with fresh 0.5 energy
+
+state_test = state.replace(energy=jnp.array([0.03, 0.5, 0.5]))
+actions = jnp.array([[6,0,0,0,0]]*3)
+obs, state_test, rewards, done, info = env.step_env(subkey, state_test, actions)
+print("agent 0 energy after starving:", state_test.energy[0])
+print("agent 0 loc after starving:", state_test.agent_locs[0])
+
+
+# guilty respawn test: 
+# we force agent 1 into a greedy state and accuse, then should expect him to respawn. 
+
+state_test = state.replace(
+    cumulative_harvest=jnp.array([0., 20., 0.]),
+    cumulative_invest=jnp.array([0., 0., 0.]),
+)
+actions = jnp.array([[6,0,2,1,0], [6,0,0,0,0], [6,0,0,0,0]])
+obs, state_test, rewards, done, info = env.step_env(subkey, state_test, actions)
+print("agent 1 loc after guilty verdict:", state_test.agent_locs[1])
