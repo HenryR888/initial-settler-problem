@@ -1,0 +1,62 @@
+digraph ISP_One_Step {
+    rankdir=TB;
+    splines=true;
+    node [shape=box, style="rounded,filled", fillcolor="#f8f8f8", fontname="Helvetica"];
+    edge [fontname="Helvetica"];
+
+    Start [label="Agents spawn in environment\nInitial positions + energy\nRiver health R_t"];
+    
+    Observe [label="Agents observe local state\nRiver area / tile richness\nOther agents / claims / recommendations"];
+    
+    Action [label="Agent chooses 5-D action array\n[ENV_ACTION, CLAIM_LEVEL, ACCUSE_TARGET, CHARGE, RECOMMEND]"];
+
+    EnvAction [label="ENV_ACTION\nMove | Harvest | Invest | Punish"];
+    Claim [label="CLAIM_LEVEL\n0,1,2,3,4\nvery low → very high"];
+    Accuse [label="ACCUSE_TARGET + CHARGE\naccuse agent j of:\ngreedy | freeloader | lying"];
+    Recommend [label="RECOMMEND\nharvest_more | harvest_less | invest_more"];
+
+    Move [label="Move\nAgent moves toward / around river"];
+    
+    Harvest [label="Harvest river tile\nReward = +1 · R_t · tile_richness\nEnergy += β_h\nRiver health -= γ_h"];
+
+    Invest [label="Invest in river\nReward = 0\nEnergy -= β_v\nRiver health += γ_v"];
+
+    Punish [label="Punish agent j\nPunisher energy -= c_pun\nRecipient energy -= c_rec\nRecipient respawned"];
+
+    Audit [label="Social auditing system\nIf guilty of greedy / freeloader / lying:\nagent is respawned"];
+
+    EnergyCheck [label="Energy check\nIf energy = 0:\nagent respawned away from river"];
+
+    Update [label="Update environment state\nNew positions\nNew energies\nNew river health\nUpdated communication records"];
+
+    Termination [label="Termination check\nEnd episode if:\nnum_steps reached\nOR river_health < 0.1 for 15 steps"];
+
+    Next [label="Next timestep"];
+
+    Start -> Observe;
+    Observe -> Action;
+
+    Action -> EnvAction;
+    Action -> Claim;
+    Action -> Accuse;
+    Action -> Recommend;
+
+    EnvAction -> Move;
+    EnvAction -> Harvest;
+    EnvAction -> Invest;
+    EnvAction -> Punish;
+
+    Accuse -> Audit;
+    Claim -> Audit [label="used by audit"];
+    
+    Move -> Update;
+    Harvest -> Update;
+    Invest -> Update;
+    Punish -> Update;
+    Audit -> Update;
+    Recommend -> Update [label="message available"];
+    
+    Update -> EnergyCheck;
+    EnergyCheck -> Termination;
+    Termination -> Next [label="if not terminal"];
+}
