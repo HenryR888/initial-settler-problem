@@ -883,7 +883,7 @@ class ISP(MultiAgentEnv):
                 inner_t=jnp.int32(0),
                 outer_t=jnp.int32(0),
                 last_comms=jnp.zeros((num_agents, 4), dtype=jnp.float32),
-                tile_richness=jax.random.uniform(k_rich, shape=(len(self.RIVER),), minval=0.5, maxval=1.5)
+                tile_richness=jax.random.uniform(k_rich, shape=(len(self.RIVER),), minval=0.2, maxval=2.0)
             )
         
         # Now we return both the observation and state for the initial state: 
