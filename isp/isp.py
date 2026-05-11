@@ -197,14 +197,12 @@ class ISP(MultiAgentEnv):
             # This is a 15x9 gridworld which we have proposed, on the basis that we will use 3 agents to start out. There are walls on the left and right and bottom of the environment to prevent the agents walking out. 
             # the reason for the wall between the river and the agents living area is to prevent an agent just being able stand next to a river for infinite time and continue harvesting/investing...they actually need to make a choice to leave the living area and enter the river to harvest/invest
             map_ASCII = [
-                    'WRRRRRRRRRRRRRW',
-                    'WRRRRRRRRRRRRRW',
-                    'WRRRRRRRRRRRRRW',
-                    'WWWWWWWWWWWWWWW',
-                    '   P    P    P ',
-                    '  P    P    P  ',
-                    '   P    P    P ',
-                    'WWWWWWWWWWWWWWW',
+                    'WRRRRRW',
+                    'WRRRRRW',
+                    'WWWWWWW',
+                    ' P P P ',
+                    ' P P P ',
+                    'WWWWWWW',
                 ],
             # reputation and audit hyperparams:
             p_err=0.1, # error of faulty communication i.e. audit signal is flipped
