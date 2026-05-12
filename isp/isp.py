@@ -188,7 +188,7 @@ class ISP(MultiAgentEnv):
             w_p=0.1, # weight for indicator function for agent being punished
             lambda_h = 0.1, # hunger threshold for energy level...if energy level drops below this, agent is penalised heavily with w_h
             #lambda_c=0.2, # river collapse hyperparam...we shall start with K as this value, but might provide interesting dynamics to have different K values with lambdda_c to start penalising agents earlier rather than later
-            c_pun=0.08, # energy cost for agent to punish someone else
+            c_pun=0.0, # energy cost for agent to punish someone else - !NOTE Changed this to 0 to test that punishment norm actually emerges. 
             c_rec=0.16, # energy cost for agent who is receiving punishment
             jit = True,
             obs_size=5, # each agent has fov of 5x5 grid within tiles to rely on comms
@@ -778,10 +778,10 @@ class ISP(MultiAgentEnv):
             # Reward function Update: Recall reward is: u_{t,i} = w_f*delta_e - w_h.I[e<=lambda_h] - w_c*I[r<=k] - w_p*[punish]
             #delta_e = energy_new - energy_old
             #hunger_penalty = jnp.where(energy_new <= self.lambda_h, self.w_h, 0.0)
-            #collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
+            collapse_penalty = jnp.where(R_new<=self.K_collapse_thresh, self.w_c, 0.0)
             #punish_penalty = jnp.where(punishing, self.w_p, 0.0)
             # rewards = (self.w_f*delta_e) - hunger_penalty - collapse_penalty - punish_penalty # reward function
-            rewards = harvesting.astype(jnp.float32) * R_new * agent_tile_richness # update reward to depend on the level of the river and tile richness in order to provoke communication
+            rewards = harvesting.astype(jnp.float32) * (0.5 + R_new * agent_tile_richness) - collapse_penalty # here we have harvesting, and added a constant to allow agents who defect to actually obtain higher reward than other agents. Also, return collapse_penalty in order to incentivise agents to punish when river collapses due to greedy agents.
 
             # update the grid with river tiles and place agents on their new respective tiles: 
             new_grid = state.grid.at[self.RIVER[:, 0], self.RIVER[:, 1]].set(jnp.int16(Items.river))
