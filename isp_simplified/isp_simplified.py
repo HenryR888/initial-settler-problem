@@ -15,8 +15,9 @@ MAX_STEPS = 500
 # NUM_PATCHES...NUM_PATCHES+NUM_AGENTS-1 = Punish agent j (self-punish is NOOP)
 # NUM_PATCHES + NUM_AGENTS = NOOP
 
+@dataclass
 class State:
-    patch_level: chex.Array #(num_patches,) float32 in [0,1]
+    patch_levels: chex.Array #(num_patches,) float32 in [0,1]
     timeout: chex.Array # (num_agents,) int32, steps remaining
     time: int
 
@@ -82,4 +83,22 @@ class CPR:
         new_patch_levels = jnp.maximum(0.0, state.patch_levels - harvests_per_patch*self.harvest_amount)
 
         # for the punishment, we set the timeout to timeout duration for any punished agent: 
-        
+        punished = jnp.any(punish_mask, axis=0)
+        timeout = jnp.where(punished, self.timeout_duration, state.timeout)
+
+        # regen: alive patches regenerate with p_regen(L)
+        L = jnp.sum(new_patch_levels>0).astype(jnp.int32)
+        p = self._p_regen[L]
+        regen_fired = jax.random.bernoulli(regen_key, p, shape=(self.num_patches,))
+        alive_after = new_patch_levels >0
+        new_patch_levels = jnp.minimum(
+            1.0,
+            new_patch_levels+(regen_fired&alive_after).astype(jnp.float32) * self.regent_amount
+        )
+
+        time = state.time +1 
+        done = time>=self.max_steps
+
+        new_state = State(patch_levels=new_patch_levels, timeout=timeout, time=time)
+        info = {"patch_levels": new_patch_levels, "timeout": timeout}
+        return self._get_obs(new_state), new_state, rewards, done, info
