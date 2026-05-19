@@ -53,7 +53,7 @@ class CPR:
     def _get_obs(self, state: State) -> chex.Array:
         shared = jnp.concatenate([
             state.patch_levels,
-            state.timeout.astype(jnp.float32)/self.timeout_duration
+            state.timeout.astype(jnp.float32)/max(self.timeout_duration, 1)
         ]) # shape is: (num_patches + num_agents,)
         agents_ids = jnp.eye(self.num_agents, dtype=jnp.float32) # (num_agents, num_agents)
         return jnp.concatenate([jnp.tile(shared, (self.num_agents, 1)), agents_ids], axis=1)
