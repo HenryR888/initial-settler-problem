@@ -314,6 +314,20 @@ def single_run(config):
 
     train_state = jax.tree_map(lambda x: x[0], out["runner_state"][0])
     save_params(train_state, f"./checkpoints/cpr/seed{config['SEED']}.pkl")
+
+    # Save metrics for offline plotting (aggregated across seeds via vmap)
+    metrics_np = jax.tree_util.tree_map(lambda x: np.array(x[0]), out["metrics"])
+    tag = "punishment" if config["ENV_KWARGS"]["timeout_duration"] > 0 else "no-punishment"
+    results_dir = "./results/cpr"
+    os.makedirs(results_dir, exist_ok=True)
+    results_path = f"{results_dir}/seed{config['SEED']}_{tag}.pkl"
+    with open(results_path, "wb") as f:
+        pickle.dump({
+            "metrics": metrics_np,
+            "config": {k: v for k, v in config.items() if k != "ENV_KWARGS"},
+        }, f)
+    print(f"Metrics saved to {results_path}")
+
     return out
 
 
