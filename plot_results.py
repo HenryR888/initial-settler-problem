@@ -128,7 +128,7 @@ def make_figure(results_dir: str, out_path: str, window: int = 5):
     )
 
     fig.suptitle(
-        f"CPR — IPPO Training Curves\n{seed_str}",
+        f"ISP Results for No Punishment Baseline\n{seed_str}",
         fontsize=14, fontweight="bold", y=1.02,
     )
     fig.tight_layout()
