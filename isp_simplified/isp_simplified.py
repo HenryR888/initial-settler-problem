@@ -84,7 +84,7 @@ class CPR:
 
         # for the punishment, we set the timeout to timeout duration for any punished agent: 
         punished = jnp.any(punish_mask, axis=0)
-        timeout = jnp.where(punished, self.timeout_duration, state.timeout)
+        timeout = jnp.where(punished, self.timeout_duration, jnp.maximum(0, state.timeout-1))
 
         # regen: alive patches regenerate with p_regen(L)
         L = jnp.sum(new_patch_levels>0).astype(jnp.int32)
