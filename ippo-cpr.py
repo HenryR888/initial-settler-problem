@@ -26,7 +26,7 @@ CONFIG = {
     "LR": 3e-4,
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
     "NUM_STEPS": 500, # rollout horizon - i.e. num of env steps before performing PPO update
-    "TOTAL_TIMESTEPS": 5e6, # total number of time steps before training ends (!NOTE DEMO RUN IS 5e6 timesteps...default is 1e8)
+    "TOTAL_TIMESTEPS": 1e8, # total number of time steps before training ends (!NOTE DEMO RUN IS 5e6 timesteps...default is 1e8)
     "UPDATE_EPOCHS": 4, # number of times we iterate over the rollot data before collecting new data 
     "NUM_MINIBATCHES": 8, # NUM_ACTORS (192) must be divisible by this
     "GAMMA": 0.99,
