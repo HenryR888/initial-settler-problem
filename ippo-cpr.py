@@ -39,7 +39,7 @@ CONFIG = {
     "ENV_KWARGS": {
         "num_agents": 3,
         "num_patches": 3,
-        "timeout_duration": 0,# we set this to 0 to disable punishment
+        "timeout_duration": 25,# we set this to 0 to disable punishment
     },
     "ENTITY": "henryrochester8-university-of-cape-town",
     "PROJECT": "isp-simplified",
@@ -344,7 +344,7 @@ if __name__ == "__main__":
     if args.wandb_mode is not None:
         config["WANDB_MODE"] = args.wandb_mode
     if args.punishment:
-        config["ENV_KWARGS"]["timeout_duration"] = 5
+        config["ENV_KWARGS"]["timeout_duration"] = 25
         config["WANDB_TAGS"] = [t for t in config["WANDB_TAGS"] if t != "no-punishment"] + ["punishment"]
 
     single_run(config)
