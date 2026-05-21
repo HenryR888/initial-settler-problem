@@ -21,7 +21,7 @@ import argparse
 from isp_simplified.isp_simplified import CPR
 
 CONFIG = {
-    "SEED": 42,
+    "SEED": 42, # use seed 42, 
     "NUM_SEEDS": 1,
     "LR": 3e-4,
     "NUM_ENVS": 64, # NOTE: change this to 128 or 256 on TPU...this is the number of parallel environments
