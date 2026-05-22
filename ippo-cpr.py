@@ -39,7 +39,7 @@ CONFIG = {
     "ENV_KWARGS": {
         "num_agents": 3,
         "num_patches": 3,
-        "timeout_duration": 25,# we set this to 0 to disable punishment
+        "timeout_duration":0,# we set this to 0 to disable punishment
     },
     "ENTITY": "henryrochester8-university-of-cape-town",
     "PROJECT": "isp-simplified",
