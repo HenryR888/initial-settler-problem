@@ -83,6 +83,11 @@ def make_train(config):
     num_agents = env.num_agents
     num_patches = env.num_patches
     noop_action = num_patches + num_agents
+    # here we create an action mask to remove the agents' ability to punish when we set the timeout_duration to 0 for the no-punishment baseline: 
+    action_mask = np.ones(env.num_actions, dtype=bool)
+    if config["ENV_KWARGS"]["timeout_duration"] ==0:
+        action_mask[num_patches:num_patches + num_agents] = False
+    action_mask = jnp.array(action_mask)
     obs_size = env.obs_size
 
     config["NUM_ACTORS"] = num_agents * config["NUM_ENVS"]
@@ -127,6 +132,7 @@ def make_train(config):
 
                 obs_batch = last_obs.reshape(config["NUM_ACTORS"], obs_size)
                 pi, value = network.apply(train_state.params, obs_batch)
+                pi = distrax.Categorical(logits=jnp.where(action_mask, pi.logits, -1e9)) # we make the punish actions have near-zero prob when the action_mask is applied
                 action = pi.sample(seed=_rng)      # (NUM_ACTORS,)
                 log_prob = pi.log_prob(action)     # (NUM_ACTORS,)
 
